@@ -1,0 +1,7 @@
+{
+	"$schema": "https://raw.githubusercontent.com/SteamClientHomebrew/Millennium/main/src/sys/plugin-schema.json",
+	"common_name": "Kitsune Notifications",
+	"name": "kitsune-notifications",
+	"description": "Reposition Steam desktop notification toasts (default bottom-right) to any screen corner via SetWindowPos.",
+	"backendType": "lua"
+}

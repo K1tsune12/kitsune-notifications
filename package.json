@@ -1,0 +1,17 @@
+{
+  "scripts": {
+    "dev": "millennium-ttc --build dev",
+    "build": "millennium-ttc --build prod"
+  },
+  "type": "module",
+  "name": "kitsune-notifications",
+  "version": "0.1.0",
+  "description": "Reposition Steam desktop notification toasts via SetWindowPos.",
+  "main": "./frontend/index.jsx",
+  "author": "Kitsune",
+  "license": "MIT",
+  "dependencies": {
+    "@steambrew/client": "^5.5.14",
+    "@steambrew/ttc": "^2.7.5"
+  }
+}
