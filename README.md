@@ -1,25 +1,40 @@
 # Kitsune Notifications
 
-Millennium plugin that moves Steam desktop notification toasts from the
-default bottom-right corner to the top-right corner of the screen.
+Millennium plugin that moves Steam desktop notification toasts to any screen
+corner, with a configurable delay and edge margin.
 
 ## What it does
 
 Steam shows notification toasts (friend online, achievement, etc.) at the
 bottom-right corner by default. This plugin intercepts the toast popup creation
-in the SharedJSContext and repositions each toast to the top-right corner using
-`SetWindowPos` from a Lua FFI backend.
+in the SharedJSContext and repositions each toast using `SetWindowPos` from a
+Lua FFI backend. The target corner, edge margin, and the delay before the move
+fires are all user-configurable through Millennium's "Configure" panel.
+
+## Configure panel
+
+Open `Millennium → Plugins → Kitsune Notifications → Configure`:
+
+| Setting       | What it does                                                                          | Default     |
+|---------------|---------------------------------------------------------------------------------------|-------------|
+| Enabled       | Master toggle. When off, Steam's default behavior is left alone.                      | On          |
+| Position      | Target screen corner: Top right / Top left / Bottom right / Bottom left.              | Top right   |
+| Move delay    | Milliseconds to wait after a toast is created before moving it. Higher = less flicker but more time at the original position. | 1000 ms     |
+| Edge margin   | Pixels of space between the toast and the nearest screen edges.                       | 16 px       |
+
+Settings persist to `settings.json` in the plugin folder.
 
 ## How it works
 
 1. Hooks `window.open` in the SharedJSContext.
 2. When a popup with name `notificationtoasts_<N>_desktop` is created,
-   schedules a single Lua callable to fire 1000ms later (after Steam's
-   slide-in animation completes).
+   schedules a single Lua callable to fire after `delayMs` (default 1000 ms,
+   after Steam's slide-in animation completes).
 3. The Lua backend walks top-level windows, finds the toast by size + class +
-   title heuristics, and calls `SetWindowPos` to move it to the top-right.
-4. The HWND is cached so subsequent calls within the toast's lifetime are
-   cheap.
+   title heuristics, and calls `SetWindowPos` to move it to the configured
+   corner.
+4. The HWND is cached so subsequent calls within the toast's lifetime skip the
+   heavy Z-order walk.
 
 ## Install
 
@@ -33,7 +48,8 @@ kitsune-notifications/
 └── .millennium/Dist/index.js
 ```
 
-Then enable it in the Millennium plugin settings.
+Then enable it in Millennium settings and click Configure to set your
+preferred position.
 
 ## Build from source
 
@@ -48,11 +64,11 @@ Output goes to `.millennium/Dist/index.js`. Copy that, `plugin.json`, and
 ## Known limitations
 
 **Flicker during entry/exit animations.** The toast briefly appears at the
-bottom-right during Steam's slide-in animation (~1 second), then teleports to
-the top-right and stays there for the rest of its lifetime (~4 seconds). On
-the exit animation Steam also drags it back down. Fixing this requires fighting
-Steam's animation with many `SetWindowPos` calls, which triggers the bug
-described below.
+default position during Steam's slide-in animation (~1 second), then teleports
+to the configured corner and stays there for the rest of its lifetime
+(~4 seconds). On the exit animation Steam drags it back down. Fixing this
+requires fighting Steam's animation with many `SetWindowPos` calls, which
+triggers the Millennium VM bug described below.
 
 **Millennium Lua VM bug under high FFI load.** During development we hit a
 deterministic crash at offset `0x789EF` inside `millennium.luavm64.exe`,
@@ -69,9 +85,17 @@ fixable from the plugin side. We worked around it by:
 - HWND cache keyed by pointer value so the second through Nth move attempts
   on the same toast skip the heavy walk entirely.
 
-These reduce per-walk FFI calls by ~50% versus a straightforward
-implementation, which is enough to stay under the crash threshold for normal
-toast frequency.
+**Millennium IPC drops multi-key object args.** Calling a Lua callable with
+a `{position, margin}` JS object reaches Lua with only the alphabetically-first
+key's value (margin), discarding the rest. The plugin works around this by
+serializing args as a single JSON `payload` string and parsing on the Lua side.
+
+**Millennium pluginConfig API is a no-op stub.** The settings storage API from
+`@steambrew/client` (`pluginConfig.get/set/getAll`) returns immediately with
+undefined/empty in this Millennium version. The plugin instead persists
+settings through its own backend callables (`LoadSettings` / `SaveSettings`)
+that read and write `settings.json` next to `plugin.json`. Same pattern as
+`hltb-for-millennium`.
 
 ## Architecture references
 

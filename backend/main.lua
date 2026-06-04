@@ -11,6 +11,7 @@
 
 local logger = require("logger")
 local millennium = require("millennium")
+local json = require("json")
 local ffi = require("ffi")
 
 ffi.cdef[[
@@ -261,27 +262,27 @@ local function get_work_area_for_window(hwnd)
     }
 end
 
-local function compute_target_xy(position, work, w, h)
+local function compute_target_xy(position, work, w, h, margin)
+    margin = margin or MARGIN
     if position == POSITION_TOP_RIGHT then
-        return work.right - w - MARGIN, work.top + MARGIN
+        return work.right - w - margin, work.top + margin
     elseif position == POSITION_TOP_LEFT then
-        return work.left + MARGIN, work.top + MARGIN
+        return work.left + margin, work.top + margin
     elseif position == POSITION_BOTTOM_LEFT then
-        return work.left + MARGIN, work.bottom - h - MARGIN
-    else  -- bottom-right (default)
-        return work.right - w - MARGIN, work.bottom - h - MARGIN
+        return work.left + margin, work.bottom - h - margin
+    else  -- bottom-right
+        return work.right - w - margin, work.bottom - h - margin
     end
 end
 
--- Move a single cached toast. Returns true if moved, false if HWND is no longer valid.
 -- Cheap move of a cached toast: 2-3 FFI calls (IsWindow + maybe GetMonitor + SetWindowPos).
-local function move_cached_toast(t, position)
+local function move_cached_toast(t, position, margin)
     if user32.IsWindow(t.hwnd) == 0 then return false end
     if not t.work then
         t.work = get_work_area_for_window(t.hwnd)
         if not t.work then return true end
     end
-    local x, y = compute_target_xy(position, t.work, t.w, t.h)
+    local x, y = compute_target_xy(position, t.work, t.w, t.h, margin)
     user32.SetWindowPos(t.hwnd, nil, x, y, 0, 0, SWP_FLAGS)
     return true
 end
@@ -336,16 +337,22 @@ end
 -- bool flag was reaching Lua as falsy — kept the slow path from ever running).
 local function move_impl(args, discover)
     local position = POSITION_TOP_RIGHT
-    if type(args) == "table" then
+    local margin = MARGIN
+    -- Millennium IPC mangles multi-key object args (a `{position, margin}` JS
+    -- object reaches Lua with the wrong values), so we pass a JSON string instead.
+    -- Also accept a single number for back-compat with the old single-arg style.
+    if type(args) == "string" then
+        local ok, parsed = pcall(json.decode, args)
+        if ok and type(parsed) == "table" then
+            if parsed.position ~= nil then position = tonumber(parsed.position) or POSITION_TOP_RIGHT end
+            if parsed.margin ~= nil then margin = tonumber(parsed.margin) or MARGIN end
+        end
+    elseif type(args) == "table" then
         if args.position ~= nil then position = tonumber(args.position) or POSITION_TOP_RIGHT end
+        if args.margin ~= nil then margin = tonumber(args.margin) or MARGIN end
     elseif type(args) == "number" then
         position = args
     end
-
-    local cache_size = 0
-    for _ in pairs(active_toasts) do cache_size = cache_size + 1 end
-    logger:info(string.format("[kitsune-notif] call discover=%s pos=%d cache=%d",
-        tostring(discover), position, cache_size))
 
     local now = tick_ms()
     if (now - last_move_time) < MOVE_THROTTLE_MS and not discover then return false end
@@ -355,7 +362,7 @@ local function move_impl(args, discover)
     local moved = 0
     local stale = {}
     for key, t in pairs(active_toasts) do
-        local ok, still_valid = pcall(move_cached_toast, t, position)
+        local ok, still_valid = pcall(move_cached_toast, t, position, margin)
         if not ok or not still_valid then
             stale[#stale + 1] = key
         else
@@ -370,22 +377,19 @@ local function move_impl(args, discover)
         if since_walk >= FULL_WALK_THROTTLE_MS then
             last_full_walk_time = now
             local new_keys = discover_toasts()
-            logger:info(string.format("[kitsune-notif] walk found %d new toast(s)", #new_keys))
             for _, key in ipairs(new_keys) do
                 local t = active_toasts[key]
                 if t then
-                    local ok, still_valid = pcall(move_cached_toast, t, position)
+                    local ok, still_valid = pcall(move_cached_toast, t, position, margin)
                     if ok and still_valid then moved = moved + 1
                     else active_toasts[key] = nil end
                 end
             end
-        else
-            logger:info(string.format("[kitsune-notif] discover throttled (%dms since last walk)", since_walk))
         end
     end
 
     if moved > 0 then
-        logger:info(string.format("[kitsune-notif] moved %d toast(s) discover=%s", moved, tostring(discover)))
+        logger:info(string.format("[kitsune-notif] moved %d toast(s) pos=%d margin=%d", moved, position, margin))
     end
     return moved > 0
 end
@@ -405,6 +409,59 @@ function MoveNotificationsToCorner(args)
     return move_impl(args, false)
 end
 
+-- Settings persistence. The Millennium pluginConfig API (in @steambrew/client) is
+-- a no-op stub in this SDK version, so we manage our own JSON file next to
+-- plugin.json (same pattern hltb-for-millennium uses).
+local SETTINGS_DEFAULTS = {
+    enabled = true,
+    position = POSITION_TOP_RIGHT,
+    delayMs = 1000,
+    marginPx = 16,
+}
+
+local function settings_path()
+    return millennium.get_install_path() .. "/settings.json"
+end
+
+local function read_settings_file()
+    local path = settings_path()
+    local file = io.open(path, "r")
+    if not file then return {} end
+    local content = file:read("*a")
+    file:close()
+    local ok, parsed = pcall(json.decode, content)
+    if not ok or type(parsed) ~= "table" then return {} end
+    return parsed
+end
+
+local function merge_with_defaults(t)
+    local out = {}
+    for k, v in pairs(SETTINGS_DEFAULTS) do
+        if t[k] ~= nil then out[k] = t[k] else out[k] = v end
+    end
+    return out
+end
+
+function LoadSettings()
+    local merged = merge_with_defaults(read_settings_file())
+    return json.encode(merged)
+end
+
+function SaveSettings(payload)
+    local ok_decode, parsed = pcall(json.decode, payload)
+    if not ok_decode or type(parsed) ~= "table" then
+        return json.encode({ success = false, error = "invalid payload" })
+    end
+    local merged = merge_with_defaults(parsed)
+    local file, err = io.open(settings_path(), "w")
+    if not file then
+        return json.encode({ success = false, error = tostring(err) })
+    end
+    file:write(json.encode(merged))
+    file:close()
+    return json.encode({ success = true })
+end
+
 local function on_load()
     logger:info("kitsune-notifications loaded with Millennium " .. millennium.version())
     millennium.ready()
@@ -416,14 +473,9 @@ end
 
 local function on_frontend_loaded()
     logger:info("kitsune-notifications frontend loaded")
-    -- Sweep any currently-open toasts on startup. Mirrors kitsune-mica which
-    -- calls its main worker function here (and works reliably). Avoids the
-    -- frontend doing a callable() round-trip before the IPC layer is ready,
-    -- which seems to trigger a deterministic crash in millennium.luavm64.exe.
-    local ok, err = pcall(move_impl, { position = 1 }, true)
-    if not ok then
-        logger:error("[kitsune-notif] initial sweep failed: " .. tostring(err))
-    end
+    -- No initial sweep: there are no toasts on screen at plugin load, so a
+    -- discover walk here would be wasted FFI volume against Millennium's
+    -- VM crash threshold. The window.open hook handles toasts as they appear.
 end
 
 return {

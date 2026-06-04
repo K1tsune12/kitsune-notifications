@@ -5,7 +5,7 @@
   },
   "type": "module",
   "name": "kitsune-notifications",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reposition Steam desktop notification toasts via SetWindowPos.",
   "main": "./frontend/index.jsx",
   "author": "Kitsune",
