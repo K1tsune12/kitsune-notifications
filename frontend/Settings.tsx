@@ -1,7 +1,7 @@
 import {
 	callable,
 	DialogControlsSection,
-	DialogControlsSectionHeader,
+	Dropdown,
 	DropdownItem,
 	type SingleDropdownOption,
 	SliderField,
@@ -16,6 +16,12 @@ declare global {
 			createElement: unknown;
 			Fragment: unknown;
 		};
+	}
+	// We compile JSX with `jsxFactory: window.SP_REACT.createElement`, so raw
+	// host elements (`<div>`, `<>`) need this stub to satisfy the type-checker.
+	namespace JSX {
+		// eslint-disable-next-line @typescript-eslint/no-empty-interface
+		interface IntrinsicElements { [elem: string]: any; }
 	}
 }
 const { useState, useEffect } = window.SP_REACT;
@@ -33,6 +39,12 @@ export const DEFAULTS = {
 	marginBottomPx: 16,
 	marginLeftPx: 16,
 	debugMode: false,
+	overlayEnabled: false,
+	overlayPosition: POSITION_TOP_RIGHT,
+	overlayMarginTopPx: 16,
+	overlayMarginRightPx: 16,
+	overlayMarginBottomPx: 16,
+	overlayMarginLeftPx: 16,
 };
 
 export type Settings = typeof DEFAULTS;
@@ -45,6 +57,15 @@ const POSITION_OPTIONS = [
 	{ data: POSITION_BOTTOM_LEFT, label: 'Bottom left' },
 ];
 
+const SECTION_GENERAL = 'general';
+const SECTION_OVERLAY = 'overlay';
+const SECTION_ADVANCED = 'advanced';
+const SECTION_OPTIONS = [
+	{ data: SECTION_GENERAL, label: 'General' },
+	{ data: SECTION_OVERLAY, label: 'In-game' },
+	{ data: SECTION_ADVANCED, label: 'Advanced' },
+];
+
 const loadSettingsRaw = callable<[], string>('LoadSettings');
 const saveSettingsRaw = callable<[{ payload: string }], string>('SaveSettings');
 
@@ -55,9 +76,8 @@ export function subscribeSettings(cb: Listener): () => void {
 	return () => { listeners.delete(cb); };
 }
 
-// Migration: older versions stored a single `marginPx` and a `delayMs` field.
-// If the new directional margin keys are missing, fall back to the legacy value
-// so users upgrading don't lose their margin choice. `delayMs` is dropped.
+// v0.1/v0.2 stored a single `marginPx` and a `delayMs`. Spread the legacy
+// margin across the four directional keys and drop `delayMs`.
 function migrate(stored: Record<string, any>): Partial<Settings> {
 	const legacyMargin = typeof stored.marginPx === 'number' ? stored.marginPx : undefined;
 	const out: Record<string, any> = { ...stored };
@@ -86,8 +106,13 @@ async function saveSettings(s: Settings): Promise<void> {
 	} catch (_e) {}
 }
 
+type MarginKey =
+	| 'marginTopPx' | 'marginRightPx' | 'marginBottomPx' | 'marginLeftPx'
+	| 'overlayMarginTopPx' | 'overlayMarginRightPx' | 'overlayMarginBottomPx' | 'overlayMarginLeftPx';
+
 export const SettingsPanel = () => {
 	const [settings, setSettings] = useState<Settings | null>(null);
+	const [section, setSection] = useState<string>(SECTION_GENERAL);
 
 	useEffect(() => {
 		loadSettings().then(setSettings);
@@ -103,64 +128,93 @@ export const SettingsPanel = () => {
 		saveSettings(next);
 	};
 
-	const marginSlider = (
-		key: 'marginTopPx' | 'marginRightPx' | 'marginBottomPx' | 'marginLeftPx',
-		label: string,
-		description: string,
-	) => (
+	const marginSlider = (key: MarginKey, label: string, disabled: boolean) => (
 		<SliderField
 			label={label}
-			description={description}
 			value={settings[key]}
 			min={0}
 			max={100}
 			step={1}
 			showValue={true}
-			editableValue={true}
 			valueSuffix=" px"
 			resetValue={DEFAULTS[key]}
-			disabled={!settings.enabled}
+			disabled={disabled}
 			onChange={(v: number) => update(key, v)}
 		/>
 	);
 
+	const generalSection = (
+		<DialogControlsSection>
+			<ToggleField
+				label="Enabled"
+				description="Move new notification toasts to the chosen corner."
+				checked={settings.enabled}
+				onChange={(checked: boolean) => update('enabled', checked)}
+			/>
+			<DropdownItem
+				label="Position"
+				description="Corner where toasts appear."
+				rgOptions={POSITION_OPTIONS}
+				selectedOption={settings.position}
+				disabled={!settings.enabled}
+				onChange={(opt: SingleDropdownOption) => update('position', opt.data as number)}
+			/>
+			{marginSlider('marginTopPx', 'Top margin', !settings.enabled)}
+			{marginSlider('marginRightPx', 'Right margin', !settings.enabled)}
+			{marginSlider('marginBottomPx', 'Bottom margin', !settings.enabled)}
+			{marginSlider('marginLeftPx', 'Left margin', !settings.enabled)}
+		</DialogControlsSection>
+	);
+
+	const overlaySection = (
+		<DialogControlsSection>
+			<ToggleField
+				label="Use different settings while playing"
+				description="When on, notifications use a separate corner and margins while a game is running."
+				checked={settings.overlayEnabled}
+				onChange={(checked: boolean) => update('overlayEnabled', checked)}
+			/>
+			<DropdownItem
+				label="Position"
+				description="Corner used while a game is running."
+				rgOptions={POSITION_OPTIONS}
+				selectedOption={settings.overlayPosition}
+				disabled={!settings.overlayEnabled}
+				onChange={(opt: SingleDropdownOption) => update('overlayPosition', opt.data as number)}
+			/>
+			{marginSlider('overlayMarginTopPx', 'Top margin', !settings.overlayEnabled)}
+			{marginSlider('overlayMarginRightPx', 'Right margin', !settings.overlayEnabled)}
+			{marginSlider('overlayMarginBottomPx', 'Bottom margin', !settings.overlayEnabled)}
+			{marginSlider('overlayMarginLeftPx', 'Left margin', !settings.overlayEnabled)}
+		</DialogControlsSection>
+	);
+
+	const advancedSection = (
+		<DialogControlsSection>
+			<ToggleField
+				label="Debug logging"
+				description="Write diagnostic events to the plugin's log file. Useful when reporting issues."
+				checked={settings.debugMode}
+				onChange={(checked: boolean) => update('debugMode', checked)}
+			/>
+		</DialogControlsSection>
+	);
+
+	const sectionContent =
+		section === SECTION_OVERLAY ? overlaySection :
+		section === SECTION_ADVANCED ? advancedSection :
+		generalSection;
+
 	return (
 		<>
-			<DialogControlsSection>
-				<ToggleField
-					label="Enabled"
-					description="Move new notification toasts to the chosen corner. Disable to leave Steam's default behavior alone."
-					checked={settings.enabled}
-					onChange={(checked: boolean) => update('enabled', checked)}
+			<div style={{ padding: '0 0 8px 0' }}>
+				<Dropdown
+					rgOptions={SECTION_OPTIONS}
+					selectedOption={section}
+					onChange={(opt: SingleDropdownOption) => setSection(opt.data as string)}
 				/>
-
-				<DropdownItem
-					label="Position"
-					description="Screen corner where toasts should land."
-					rgOptions={POSITION_OPTIONS}
-					selectedOption={settings.position}
-					disabled={!settings.enabled}
-					onChange={(opt: SingleDropdownOption) => update('position', opt.data as number)}
-				/>
-			</DialogControlsSection>
-
-			<DialogControlsSectionHeader>Margins</DialogControlsSectionHeader>
-			<DialogControlsSection>
-				{marginSlider('marginTopPx', 'Top', 'Space from the top of the work area. Used when Position is Top right or Top left.')}
-				{marginSlider('marginRightPx', 'Right', 'Space from the right edge. Used when Position is Top right or Bottom right.')}
-				{marginSlider('marginBottomPx', 'Bottom', 'Space from the bottom of the work area. Used when Position is Bottom right or Bottom left.')}
-				{marginSlider('marginLeftPx', 'Left', 'Space from the left edge. Used when Position is Top left or Bottom left.')}
-			</DialogControlsSection>
-
-			<DialogControlsSectionHeader>Advanced</DialogControlsSectionHeader>
-			<DialogControlsSection>
-				<ToggleField
-					label="Debug logging"
-					description="When on, the plugin writes diagnostic events (popup creation, hook installation, errors) to its log file. Useful when reporting a problem — include the log when you open an issue."
-					checked={settings.debugMode}
-					onChange={(checked: boolean) => update('debugMode', checked)}
-				/>
-			</DialogControlsSection>
+			</div>
+			{sectionContent}
 		</>
 	);
 };

@@ -11,10 +11,19 @@ import {
 	subscribeSettings,
 } from './Settings';
 
-// v0.3.0 architecture: hook each toast popup's own `SteamClient.Window.MoveTo`
-// to redirect every Steam-initiated reposition to our configured corner.
-// Each popup carries its own SteamClient instance, so the hook is naturally
-// scoped per-popup and doesn't affect the main Steam window or other popups.
+// Hook each toast popup's own SteamClient.Window.MoveTo so every Steam-driven
+// reposition (entry slide, periodic snap-back) lands at our configured corner.
+
+interface SteamPopup {
+	window?: Window & { name?: string };
+}
+
+interface SteamPopupManager {
+	AddPopupCreatedCallback(cb: (popup: SteamPopup) => void): { Unregister(): void };
+	AddPopupDestroyedCallback(cb: (popup: SteamPopup) => void): { Unregister(): void };
+}
+
+let current: Settings = { ...DEFAULTS };
 
 const debugLog = callable<[{ payload: string }], string>('DebugLog');
 const dlog = (msg: string) => {
@@ -22,33 +31,27 @@ const dlog = (msg: string) => {
 	debugLog({ payload: msg }).catch(() => {});
 };
 
-interface SteamPopup {
-	title: string;
-	window?: Window & { name?: string };
-}
-
-interface SteamPopupManager {
-	AddPopupCreatedCallback(cb: (popup: SteamPopup) => void): { Unregister(): void };
-	AddPopupDestroyedCallback(cb: (popup: SteamPopup) => void): { Unregister(): void };
-	GetExistingPopup(name: string): SteamPopup | undefined;
-}
-
-let current: Settings = { ...DEFAULTS };
-
 const TOAST_W_FALLBACK = 425;
 const TOAST_H_FALLBACK = 105;
 const CASCADE_GAP = 6;
-const MAX_SLOTS = 16;  // 16 simultaneously-visible toasts is more than anyone needs
+const MAX_SLOTS = 16;
+const ANIM_DURATION_MS = 320;
+const TOAST_LIFETIME_MS = 5000;
+const OFF_SCREEN_BUFFER = 50;
+const HOOK_RETRY_LIMIT = 60;
+const HOOK_RETRY_MS = 500;
+const DOC_READY_RETRY_LIMIT = 20;
+const DOC_READY_RETRY_MS = 25;
+const FRAME_FALLBACK_MS = 16;
 
-// Slot table: slot[i] holds the popup name occupying that vertical slot, or null.
-// First free slot is assigned to each new toast; slot frees on toast destroy.
+// First-available-slot allocator for cascade stacking.
 const slots: (string | null)[] = new Array(MAX_SLOTS).fill(null);
 
 function claimSlot(name: string): number {
 	for (let i = 0; i < MAX_SLOTS; i++) {
 		if (slots[i] === null) { slots[i] = name; return i; }
 	}
-	return 0;  // overflow: stack on top of slot 0
+	return 0;
 }
 
 function releaseSlot(name: string): void {
@@ -57,19 +60,29 @@ function releaseSlot(name: string): void {
 	}
 }
 
-function computeTargetXY(
-	win: Window,
-	settings: Settings,
-	slot: number,
-): { x: number; y: number } {
+let gamesRunning = 0;
+const isInGame = (): boolean => gamesRunning > 0;
+const useOverlayProfile = (s: Settings): boolean => s.overlayEnabled && isInGame();
+
+const activePosition = (s: Settings): number =>
+	useOverlayProfile(s) ? s.overlayPosition : s.position;
+
+function activeMargins(s: Settings): { mt: number; mr: number; mb: number; ml: number } {
+	if (useOverlayProfile(s)) {
+		return { mt: s.overlayMarginTopPx, mr: s.overlayMarginRightPx, mb: s.overlayMarginBottomPx, ml: s.overlayMarginLeftPx };
+	}
+	return { mt: s.marginTopPx, mr: s.marginRightPx, mb: s.marginBottomPx, ml: s.marginLeftPx };
+}
+
+function computeTargetXY(win: Window, settings: Settings, slot: number): { x: number; y: number } {
 	const screenW = win.screen?.availWidth ?? 1920;
 	const screenH = win.screen?.availHeight ?? 1080;
 	const w = win.outerWidth || TOAST_W_FALLBACK;
 	const h = win.outerHeight || TOAST_H_FALLBACK;
 	const cascadeStep = h + CASCADE_GAP;
-	const { marginTopPx: mt, marginRightPx: mr, marginBottomPx: mb, marginLeftPx: ml } = settings;
+	const { mt, mr, mb, ml } = activeMargins(settings);
 
-	switch (settings.position) {
+	switch (activePosition(settings)) {
 		case POSITION_TOP_RIGHT:
 			return { x: screenW - w - mr, y: mt + slot * cascadeStep };
 		case POSITION_TOP_LEFT:
@@ -82,17 +95,12 @@ function computeTargetXY(
 	}
 }
 
-const ANIM_DURATION_MS = 320;
-const TOAST_LIFETIME_MS = 5000;  // Steam's default toast visibility window
-
-// Returns the off-screen translate direction for the slide animation, based on
-// the configured position. Top positions slide down from above; bottom slide
-// up from below. The window itself stays put — we slide the BODY content.
+// translateY offset used for the slide-in/slide-out keyframes.
 function slideTransform(position: number): string {
 	switch (position) {
 		case POSITION_TOP_RIGHT:
 		case POSITION_TOP_LEFT:
-			return 'translateY(-110%)';  // 110% so the box-shadow fully clears too
+			return 'translateY(-110%)';
 		case POSITION_BOTTOM_RIGHT:
 		case POSITION_BOTTOM_LEFT:
 		default:
@@ -100,14 +108,12 @@ function slideTransform(position: number): string {
 	}
 }
 
+// Targets html (not body) so the entire document slides — body alone left the
+// popup's outer wrapper visible as a ghost frame.
 function injectAnimationCss(win: any, position: number): void {
 	const doc = win.document;
 	if (!doc) return;
 	const startTransform = slideTransform(position);
-	// Animate `html` (not just body) so EVERYTHING inside the popup window —
-	// the toast card, any wrapper elements, and the window's own background
-	// region — goes invisible together during the slide-out. Animating body
-	// alone left the popup's outer container visible as a dark "ghost" frame.
 	const css = `
 		@keyframes kitsune-toast-in {
 			from { transform: ${startTransform}; opacity: 0; }
@@ -123,8 +129,6 @@ function injectAnimationCss(win: any, position: number): void {
 		html.kitsune-exiting {
 			animation: kitsune-toast-out ${ANIM_DURATION_MS}ms cubic-bezier(0.4, 0, 0.6, 1) both;
 		}
-		/* Keep html itself transparent so when its content slides out the popup
-		   window has nothing left to paint. */
 		html, body { background: transparent !important; }
 	`;
 	const style = doc.createElement('style');
@@ -136,7 +140,7 @@ function injectAnimationCss(win: any, position: number): void {
 function triggerExitAnim(win: any): void {
 	try {
 		win.document?.documentElement?.classList?.add('kitsune-exiting');
-	} catch (_e) { /* doc may be gone already */ }
+	} catch (_e) { /* doc may be gone */ }
 }
 
 function handlePopupCreated(popup: SteamPopup): void {
@@ -156,30 +160,24 @@ function handlePopupCreated(popup: SteamPopup): void {
 	const slot = claimSlot(name);
 	dlog(`toast ${name} hooked into slot ${slot}`);
 
-	// Animation state for exit slide. When `exitAnimating` is true, the
-	// MoveTo hook returns the animated Y (and X) instead of the static target.
-	// This makes EVERY MoveTo — Steam's internal animation frames AND our own
-	// rAF-driven calls — render at the same Y, so the window and its Mica /
-	// Acrylic backdrop slide off as a single cohesive unit.
+	// During exit, the hook returns the animated Y so OS-level effects
+	// (Mica/Acrylic backdrop) slide off with the window as one unit.
 	let exitAnimating = false;
 	let exitY = 0;
 
 	const baseTarget = () => computeTargetXY(win, current, slot);
 	const targetFor = () => {
 		const t = baseTarget();
-		if (exitAnimating) return { x: t.x, y: exitY };
-		return t;
+		return exitAnimating ? { x: t.x, y: exitY } : t;
 	};
 
-	// Save the ORIGINAL MoveTo before installing the hook. We need this for
-	// the rAF-driven exit slide so we can move the window past our hook.
+	// Snapshot the original before we replace it — needed to drive the rAF
+	// exit slide without recursing through our own hook.
 	const origMoveToRaw: ((x: number, y: number, scale: boolean) => unknown) | null =
-		typeof sc.Window.MoveTo === 'function'
-			? sc.Window.MoveTo.bind(sc.Window)
-			: null;
+		typeof sc.Window.MoveTo === 'function' ? sc.Window.MoveTo.bind(sc.Window) : null;
 
-	// Hook MoveTo. The 3rd arg `applyBrowserScaleOrDPIValue` is required —
-	// pass through what Steam sent (or false if it called with only 2 args).
+	// 3rd arg `applyBrowserScaleOrDPIValue` is required; pass through what
+	// Steam sent (or false if the caller only sent x, y).
 	try {
 		if (origMoveToRaw) {
 			sc.Window.MoveTo = (_a: number, _b: number, ...rest: unknown[]) => {
@@ -199,51 +197,48 @@ function handlePopupCreated(popup: SteamPopup): void {
 		}
 	} catch (e) { dlog(`MoveToLocation hook failed: ${(e as Error)?.message ?? e}`); }
 
-	// Proactive initial move (Steam may have already started sliding before our
-	// callback fired).
+	// Initial move in case Steam already started positioning before our hook landed.
 	try {
 		const t = targetFor();
 		sc.Window.MoveTo(t.x, t.y, false);
 	} catch (e) { dlog(`initial MoveTo failed: ${(e as Error)?.message ?? e}`); }
 
-	// Inject slide-in animation now (or wait for doc to become available).
+	// Inject the slide-in keyframes (retry until the doc is ready).
 	const tryInject = (attempts: number) => {
 		if (win.document?.documentElement) {
-			injectAnimationCss(win, current.position);
-		} else if (attempts < 20) {
-			setTimeout(() => tryInject(attempts + 1), 25);
+			injectAnimationCss(win, activePosition(current));
+		} else if (attempts < DOC_READY_RETRY_LIMIT) {
+			setTimeout(() => tryInject(attempts + 1), DOC_READY_RETRY_MS);
 		}
 	};
 	tryInject(0);
 
-	// Drive the exit slide ourselves. The CSS html animation slides the body
-	// contents while the rAF loop slides the WINDOW itself — both end at the
-	// same off-screen Y, so the Mica/Acrylic backdrop blur (from kitsune-mica)
-	// and any other OS-level window effects slide off with the toast as one
-	// unit, no lingering ghost frame.
+	// CSS slides the body, the rAF loop slides the OS window — both end at the
+	// same off-screen Y so OS-level effects leave together.
 	const runExitSlide = () => {
 		if (!origMoveToRaw) return;
-		triggerExitAnim(win);  // CSS slide-out for body contents
+		triggerExitAnim(win);
 
 		const start = baseTarget();
 		const screenH = win.screen?.availHeight ?? 1080;
 		const h = win.outerHeight || TOAST_H_FALLBACK;
-		const isTop = current.position === POSITION_TOP_RIGHT || current.position === POSITION_TOP_LEFT;
-		const offY = isTop ? -h - 50 : screenH + 50;
+		const pos = activePosition(current);
+		const isTop = pos === POSITION_TOP_RIGHT || pos === POSITION_TOP_LEFT;
+		const offY = isTop ? -h - OFF_SCREEN_BUFFER : screenH + OFF_SCREEN_BUFFER;
 
 		exitAnimating = true;
 		const startedAt = (win as any).performance?.now?.() ?? Date.now();
 		const step = () => {
 			const now = (win as any).performance?.now?.() ?? Date.now();
 			const tProgress = Math.min((now - startedAt) / ANIM_DURATION_MS, 1);
-			const eased = 1 - Math.pow(1 - tProgress, 3);  // ease-out cubic
+			const eased = 1 - Math.pow(1 - tProgress, 3);
 			exitY = Math.round(start.y + (offY - start.y) * eased);
 			try { origMoveToRaw(start.x, exitY, false); } catch (_e) {}
 			if (tProgress < 1) {
-				(win as any).requestAnimationFrame?.(step) ?? setTimeout(step, 16);
+				(win as any).requestAnimationFrame?.(step) ?? setTimeout(step, FRAME_FALLBACK_MS);
 			}
 		};
-		(win as any).requestAnimationFrame?.(step) ?? setTimeout(step, 16);
+		(win as any).requestAnimationFrame?.(step) ?? setTimeout(step, FRAME_FALLBACK_MS);
 	};
 
 	setTimeout(runExitSlide, TOAST_LIFETIME_MS - ANIM_DURATION_MS);
@@ -258,10 +253,10 @@ function handlePopupDestroyed(popup: SteamPopup): void {
 function installHook(attempt: number = 0): void {
 	const mgr: SteamPopupManager | undefined = Reflect.get(globalThis, 'g_PopupManager');
 	if (!mgr) {
-		if (attempt < 60) {
-			setTimeout(() => installHook(attempt + 1), 500);
+		if (attempt < HOOK_RETRY_LIMIT) {
+			setTimeout(() => installHook(attempt + 1), HOOK_RETRY_MS);
 		} else {
-			dlog('g_PopupManager never appeared after 30s');
+			dlog('g_PopupManager never appeared');
 		}
 		return;
 	}
@@ -274,9 +269,40 @@ function installHook(attempt: number = 0): void {
 	}
 }
 
+interface AppLifetimeNotification { unAppID: number; bRunning: boolean; }
+
+// Track running games so `activePosition` can swap to the overlay profile.
+function installGameLifecycleHook(attempt: number = 0): void {
+	const sc: any = Reflect.get(globalThis, 'SteamClient');
+	const reg = sc?.GameSessions?.RegisterForAppLifetimeNotifications;
+	if (typeof reg !== 'function') {
+		if (attempt < HOOK_RETRY_LIMIT) {
+			setTimeout(() => installGameLifecycleHook(attempt + 1), HOOK_RETRY_MS);
+		} else {
+			dlog('GameSessions.RegisterForAppLifetimeNotifications never appeared');
+		}
+		return;
+	}
+	try {
+		reg.call(sc.GameSessions, (n: AppLifetimeNotification) => {
+			if (n.bRunning) {
+				gamesRunning++;
+				dlog(`game ${n.unAppID} started, running=${gamesRunning}`);
+			} else if (gamesRunning > 0) {
+				gamesRunning--;
+				dlog(`game ${n.unAppID} ended, running=${gamesRunning}`);
+			}
+		});
+		dlog('game lifecycle hook registered');
+	} catch (e) {
+		dlog(`game lifecycle hook failed: ${(e as Error)?.message ?? e}`);
+	}
+}
+
 loadSettings().then((s) => { current = s; });
 subscribeSettings((s) => { current = s; });
 installHook();
+installGameLifecycleHook();
 
 export default definePlugin(() => ({
 	title: 'Kitsune Notifications',

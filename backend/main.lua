@@ -1,8 +1,5 @@
--- kitsune-notifications: reposition Steam notification toast windows.
---
--- v0.3.0+: pure settings persistence backend. All window repositioning is
--- done frontend-side via g_PopupManager.AddPopupCreatedCallback + popup
--- window.moveTo. No FFI, no Win32, no Lua VM crash exposure.
+-- kitsune-notifications: settings persistence + debug log passthrough.
+-- All notification repositioning is done frontend-side (see frontend/index.tsx).
 
 local logger = require("logger")
 local millennium = require("millennium")
@@ -17,10 +14,43 @@ local SETTINGS_DEFAULTS = {
     marginRightPx = 16,
     marginBottomPx = 16,
     marginLeftPx = 16,
+    debugMode = false,
+    overlayEnabled = false,
+    overlayPosition = POSITION_TOP_RIGHT,
+    overlayMarginTopPx = 16,
+    overlayMarginRightPx = 16,
+    overlayMarginBottomPx = 16,
+    overlayMarginLeftPx = 16,
 }
 
+-- millennium.get_install_path() returns the millennium folder, not the plugin's
+-- own folder, so we append the plugin subpath explicitly.
+local function plugin_dir()
+    return millennium.get_install_path() .. "/plugins/kitsune-notifications"
+end
+
 local function settings_path()
-    return millennium.get_install_path() .. "/settings.json"
+    return plugin_dir() .. "/settings.json"
+end
+
+-- One-time move from <steam>/millennium/settings.json (shared, v0.3.0 bug) into
+-- our plugin folder.
+local function migrate_legacy_settings_path()
+    local legacy = millennium.get_install_path() .. "/settings.json"
+    local target = settings_path()
+    if legacy == target then return end
+    local lf = io.open(legacy, "r")
+    if not lf then return end
+    local content = lf:read("*a")
+    lf:close()
+    local tf = io.open(target, "r")
+    if tf then tf:close(); return end
+    local out = io.open(target, "w")
+    if not out then return end
+    out:write(content)
+    out:close()
+    os.remove(legacy)
+    logger:info("[settings] migrated " .. legacy .. " -> " .. target)
 end
 
 local function read_settings_file()
@@ -33,6 +63,7 @@ local function read_settings_file()
     return parsed
 end
 
+-- Filters legacy/unknown keys (only defaults are emitted) so upgrades self-clean.
 local function merge_with_defaults(t)
     local out = {}
     for k, v in pairs(SETTINGS_DEFAULTS) do
@@ -41,7 +72,7 @@ local function merge_with_defaults(t)
     return out
 end
 
--- Debug logging from the frontend (frontend has no native log file access).
+-- Frontend has no file-log access; this is its passthrough into the plugin log.
 function DebugLog(payload)
     if type(payload) == "string" then
         logger:info("[js] " .. payload)
@@ -72,6 +103,7 @@ end
 
 local function on_load()
     logger:info("kitsune-notifications loaded with Millennium " .. millennium.version())
+    migrate_legacy_settings_path()
     millennium.ready()
 end
 
