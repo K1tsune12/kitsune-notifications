@@ -108,7 +108,7 @@ function slideTransform(position: number): string {
 	}
 }
 
-// Targets html (not body) so the entire document slides — body alone left the
+// Targets html (not body) so the entire document slides - body alone left the
 // popup's outer wrapper visible as a ghost frame.
 function injectAnimationCss(win: any, position: number): void {
 	const doc = win.document;
@@ -171,7 +171,7 @@ function handlePopupCreated(popup: SteamPopup): void {
 		return exitAnimating ? { x: t.x, y: exitY } : t;
 	};
 
-	// Snapshot the original before we replace it — needed to drive the rAF
+	// Snapshot the original before we replace it - needed to drive the rAF
 	// exit slide without recursing through our own hook.
 	const origMoveToRaw: ((x: number, y: number, scale: boolean) => unknown) | null =
 		typeof sc.Window.MoveTo === 'function' ? sc.Window.MoveTo.bind(sc.Window) : null;
@@ -213,7 +213,7 @@ function handlePopupCreated(popup: SteamPopup): void {
 	};
 	tryInject(0);
 
-	// CSS slides the body, the rAF loop slides the OS window — both end at the
+	// CSS slides the body, the rAF loop slides the OS window - both end at the
 	// same off-screen Y so OS-level effects leave together.
 	const runExitSlide = () => {
 		if (!origMoveToRaw) return;
