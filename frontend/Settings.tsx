@@ -31,9 +31,22 @@ export const POSITION_TOP_RIGHT = 1;
 export const POSITION_TOP_LEFT = 2;
 export const POSITION_BOTTOM_LEFT = 3;
 
+export const EFFECT_SLIDE = 'slide';
+export const EFFECT_FADE = 'fade';
+export const EFFECT_SCALE = 'scale';
+export const EFFECT_BOUNCE = 'bounce';
+
+export const SLIDE_AUTO = 'auto';
+export const SLIDE_UP = 'up';
+export const SLIDE_DOWN = 'down';
+export const SLIDE_LEFT = 'left';
+export const SLIDE_RIGHT = 'right';
+
 export const DEFAULTS = {
 	enabled: true,
 	position: POSITION_TOP_RIGHT,
+	effect: EFFECT_SLIDE,
+	slideDirection: SLIDE_AUTO,
 	marginTopPx: 16,
 	marginRightPx: 16,
 	marginBottomPx: 16,
@@ -41,6 +54,8 @@ export const DEFAULTS = {
 	debugMode: false,
 	overlayEnabled: false,
 	overlayPosition: POSITION_TOP_RIGHT,
+	overlayEffect: EFFECT_SLIDE,
+	overlaySlideDirection: SLIDE_AUTO,
 	overlayMarginTopPx: 16,
 	overlayMarginRightPx: 16,
 	overlayMarginBottomPx: 16,
@@ -56,6 +71,25 @@ const POSITION_OPTIONS = [
 	{ data: POSITION_BOTTOM_RIGHT, label: 'Bottom right' },
 	{ data: POSITION_BOTTOM_LEFT, label: 'Bottom left' },
 ];
+
+const EFFECT_OPTIONS = [
+	{ data: EFFECT_SLIDE, label: 'Slide' },
+	{ data: EFFECT_FADE, label: 'Fade' },
+	{ data: EFFECT_SCALE, label: 'Scale' },
+	{ data: EFFECT_BOUNCE, label: 'Bounce' },
+];
+
+const SLIDE_DIRECTION_OPTIONS = [
+	{ data: SLIDE_AUTO, label: 'Auto (from corner)' },
+	{ data: SLIDE_UP, label: 'Up' },
+	{ data: SLIDE_DOWN, label: 'Down' },
+	{ data: SLIDE_LEFT, label: 'Left' },
+	{ data: SLIDE_RIGHT, label: 'Right' },
+];
+
+// Slide direction only affects effects that travel (Slide / Bounce).
+const effectTravels = (effect: string): boolean =>
+	effect === EFFECT_SLIDE || effect === EFFECT_BOUNCE;
 
 const SECTION_GENERAL = 'general';
 const SECTION_OVERLAY = 'overlay';
@@ -159,6 +193,22 @@ export const SettingsPanel = () => {
 				disabled={!settings.enabled}
 				onChange={(opt: SingleDropdownOption) => update('position', opt.data as number)}
 			/>
+			<DropdownItem
+				label="Animation"
+				description="Entry/exit effect for toasts. Slide and Bounce move off-screen; Fade and Scale stay in place."
+				rgOptions={EFFECT_OPTIONS}
+				selectedOption={settings.effect}
+				disabled={!settings.enabled}
+				onChange={(opt: SingleDropdownOption) => update('effect', opt.data as string)}
+			/>
+			<DropdownItem
+				label="Slide direction"
+				description="Direction toasts slide from/to. Auto follows the chosen corner. Only applies to Slide and Bounce."
+				rgOptions={SLIDE_DIRECTION_OPTIONS}
+				selectedOption={settings.slideDirection}
+				disabled={!settings.enabled || !effectTravels(settings.effect)}
+				onChange={(opt: SingleDropdownOption) => update('slideDirection', opt.data as string)}
+			/>
 			{marginSlider('marginTopPx', 'Top margin', !settings.enabled)}
 			{marginSlider('marginRightPx', 'Right margin', !settings.enabled)}
 			{marginSlider('marginBottomPx', 'Bottom margin', !settings.enabled)}
@@ -181,6 +231,22 @@ export const SettingsPanel = () => {
 				selectedOption={settings.overlayPosition}
 				disabled={!settings.overlayEnabled}
 				onChange={(opt: SingleDropdownOption) => update('overlayPosition', opt.data as number)}
+			/>
+			<DropdownItem
+				label="Animation"
+				description="Entry/exit effect used while a game is running."
+				rgOptions={EFFECT_OPTIONS}
+				selectedOption={settings.overlayEffect}
+				disabled={!settings.overlayEnabled}
+				onChange={(opt: SingleDropdownOption) => update('overlayEffect', opt.data as string)}
+			/>
+			<DropdownItem
+				label="Slide direction"
+				description="Direction toasts slide while a game is running. Auto follows the chosen corner. Only applies to Slide and Bounce."
+				rgOptions={SLIDE_DIRECTION_OPTIONS}
+				selectedOption={settings.overlaySlideDirection}
+				disabled={!settings.overlayEnabled || !effectTravels(settings.overlayEffect)}
+				onChange={(opt: SingleDropdownOption) => update('overlaySlideDirection', opt.data as string)}
 			/>
 			{marginSlider('overlayMarginTopPx', 'Top margin', !settings.overlayEnabled)}
 			{marginSlider('overlayMarginRightPx', 'Right margin', !settings.overlayEnabled)}

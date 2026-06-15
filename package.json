@@ -5,7 +5,7 @@
   },
   "type": "module",
   "name": "kitsune-notifications",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Reposition Steam desktop notification toasts to any screen corner, with directional margins and slide animation.",
   "main": "./frontend/index.jsx",
   "author": "Kitsune",
@@ -13,5 +13,8 @@
   "dependencies": {
     "@steambrew/client": "^5.5.14",
     "@steambrew/ttc": "^2.7.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
   }
 }

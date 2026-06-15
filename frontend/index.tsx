@@ -1,6 +1,9 @@
 import { callable, definePlugin, IconsModule } from '@steambrew/client';
 import {
 	DEFAULTS,
+	EFFECT_BOUNCE,
+	EFFECT_FADE,
+	EFFECT_SCALE,
 	loadSettings,
 	POSITION_BOTTOM_LEFT,
 	POSITION_BOTTOM_RIGHT,
@@ -8,6 +11,10 @@ import {
 	POSITION_TOP_RIGHT,
 	type Settings,
 	SettingsPanel,
+	SLIDE_DOWN,
+	SLIDE_LEFT,
+	SLIDE_RIGHT,
+	SLIDE_UP,
 	subscribeSettings,
 } from './Settings';
 
@@ -67,6 +74,12 @@ const useOverlayProfile = (s: Settings): boolean => s.overlayEnabled && isInGame
 const activePosition = (s: Settings): number =>
 	useOverlayProfile(s) ? s.overlayPosition : s.position;
 
+const activeEffect = (s: Settings): string =>
+	useOverlayProfile(s) ? s.overlayEffect : s.effect;
+
+const activeSlideDirection = (s: Settings): string =>
+	useOverlayProfile(s) ? s.overlaySlideDirection : s.slideDirection;
+
 function activeMargins(s: Settings): { mt: number; mr: number; mb: number; ml: number } {
 	if (useOverlayProfile(s)) {
 		return { mt: s.overlayMarginTopPx, mr: s.overlayMarginRightPx, mb: s.overlayMarginBottomPx, ml: s.overlayMarginLeftPx };
@@ -95,8 +108,15 @@ function computeTargetXY(win: Window, settings: Settings, slot: number): { x: nu
 	}
 }
 
-// translateY offset used for the slide-in/slide-out keyframes.
-function slideTransform(position: number): string {
+// Off-screen transform; SLIDE_AUTO follows the corner, otherwise explicit.
+function slideTransform(position: number, direction: string): string {
+	switch (direction) {
+		case SLIDE_UP: return 'translateY(-110%)';
+		case SLIDE_DOWN: return 'translateY(110%)';
+		case SLIDE_LEFT: return 'translateX(-110%)';
+		case SLIDE_RIGHT: return 'translateX(110%)';
+	}
+	// SLIDE_AUTO
 	switch (position) {
 		case POSITION_TOP_RIGHT:
 		case POSITION_TOP_LEFT:
@@ -108,26 +128,101 @@ function slideTransform(position: number): string {
 	}
 }
 
-// Targets html (not body) so the entire document slides - body alone left the
-// popup's outer wrapper visible as a ghost frame.
-function injectAnimationCss(win: any, position: number): void {
+// Slide/Bounce move the OS window off-screen; Fade/Scale animate in place.
+function effectMovesWindow(effect: string): boolean {
+	return effect !== EFFECT_FADE && effect !== EFFECT_SCALE;
+}
+
+interface Keyframes {
+	inFrom: string;
+	inTo: string;
+	outFrom: string;
+	outTo: string;
+	inEasing: string;
+	outEasing: string;
+	origin: string;
+}
+
+// transform-origin so Scale zooms from the toast's corner, not the center.
+function cornerOrigin(position: number): string {
+	switch (position) {
+		case POSITION_TOP_RIGHT: return 'top right';
+		case POSITION_TOP_LEFT: return 'top left';
+		case POSITION_BOTTOM_LEFT: return 'bottom left';
+		case POSITION_BOTTOM_RIGHT:
+		default: return 'bottom right';
+	}
+}
+
+// Per-effect entry/exit keyframe state.
+function keyframesFor(effect: string, position: number, direction: string): Keyframes {
+	const off = slideTransform(position, direction);
+	switch (effect) {
+		case EFFECT_FADE:
+			return {
+				inFrom: 'opacity: 0;',
+				inTo: 'opacity: 1;',
+				outFrom: 'opacity: 1;',
+				outTo: 'opacity: 0;',
+				inEasing: 'ease-out',
+				outEasing: 'ease-in',
+				origin: 'center',
+			};
+		case EFFECT_SCALE:
+			// Pronounced zoom with overshoot so it reads apart from Fade.
+			return {
+				inFrom: 'transform: scale(0.6); opacity: 0;',
+				inTo: 'transform: scale(1); opacity: 1;',
+				outFrom: 'transform: scale(1); opacity: 1;',
+				outTo: 'transform: scale(0.6); opacity: 0;',
+				inEasing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+				outEasing: 'cubic-bezier(0.5, 0, 0.75, 0)',
+				origin: cornerOrigin(position),
+			};
+		case EFFECT_BOUNCE:
+			// Same travel as slide but an overshoot easing for a springy entrance.
+			return {
+				inFrom: `transform: ${off}; opacity: 0;`,
+				inTo: 'transform: translateY(0); opacity: 1;',
+				outFrom: 'transform: translateY(0); opacity: 1;',
+				outTo: `transform: ${off}; opacity: 0;`,
+				inEasing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+				outEasing: 'cubic-bezier(0.4, 0, 0.6, 1)',
+				origin: 'center',
+			};
+		default: // EFFECT_SLIDE
+			return {
+				inFrom: `transform: ${off}; opacity: 0;`,
+				inTo: 'transform: translateY(0); opacity: 1;',
+				outFrom: 'transform: translateY(0); opacity: 1;',
+				outTo: `transform: ${off}; opacity: 0;`,
+				inEasing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+				outEasing: 'cubic-bezier(0.4, 0, 0.6, 1)',
+				origin: 'center',
+			};
+	}
+}
+
+// Targets html (not body) so the whole document animates without a ghost frame.
+function injectAnimationCss(win: any, effect: string, position: number, direction: string): void {
 	const doc = win.document;
 	if (!doc) return;
-	const startTransform = slideTransform(position);
+	const k = keyframesFor(effect, position, direction);
 	const css = `
 		@keyframes kitsune-toast-in {
-			from { transform: ${startTransform}; opacity: 0; }
-			to   { transform: translateY(0);    opacity: 1; }
+			from { ${k.inFrom} }
+			to   { ${k.inTo} }
 		}
 		@keyframes kitsune-toast-out {
-			from { transform: translateY(0);    opacity: 1; }
-			to   { transform: ${startTransform}; opacity: 0; }
+			from { ${k.outFrom} }
+			to   { ${k.outTo} }
 		}
 		html {
-			animation: kitsune-toast-in ${ANIM_DURATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+			transform-origin: ${k.origin};
+			animation: kitsune-toast-in ${ANIM_DURATION_MS}ms ${k.inEasing} both;
 		}
 		html.kitsune-exiting {
-			animation: kitsune-toast-out ${ANIM_DURATION_MS}ms cubic-bezier(0.4, 0, 0.6, 1) both;
+			animation: kitsune-toast-out ${ANIM_DURATION_MS}ms ${k.outEasing} both;
 		}
 		html, body { background: transparent !important; }
 	`;
@@ -160,15 +255,15 @@ function handlePopupCreated(popup: SteamPopup): void {
 	const slot = claimSlot(name);
 	dlog(`toast ${name} hooked into slot ${slot}`);
 
-	// During exit, the hook returns the animated Y so OS-level effects
-	// (Mica/Acrylic backdrop) slide off with the window as one unit.
+	// During exit the hook returns the animated point so the backdrop moves too.
 	let exitAnimating = false;
+	let exitX = 0;
 	let exitY = 0;
 
 	const baseTarget = () => computeTargetXY(win, current, slot);
 	const targetFor = () => {
 		const t = baseTarget();
-		return exitAnimating ? { x: t.x, y: exitY } : t;
+		return exitAnimating ? { x: exitX, y: exitY } : t;
 	};
 
 	// Snapshot the original before we replace it - needed to drive the rAF
@@ -206,34 +301,61 @@ function handlePopupCreated(popup: SteamPopup): void {
 	// Inject the slide-in keyframes (retry until the doc is ready).
 	const tryInject = (attempts: number) => {
 		if (win.document?.documentElement) {
-			injectAnimationCss(win, activePosition(current));
+			injectAnimationCss(win, activeEffect(current), activePosition(current), activeSlideDirection(current));
 		} else if (attempts < DOC_READY_RETRY_LIMIT) {
 			setTimeout(() => tryInject(attempts + 1), DOC_READY_RETRY_MS);
 		}
 	};
 	tryInject(0);
 
-	// CSS slides the body, the rAF loop slides the OS window - both end at the
-	// same off-screen Y so OS-level effects leave together.
+	// CSS animates the content; the rAF loop slides the OS window in sync.
 	const runExitSlide = () => {
-		if (!origMoveToRaw) return;
 		triggerExitAnim(win);
+		if (!origMoveToRaw) return;
+
+		// Fade/Scale: park the window off-screen after the fade so the OS backdrop doesn't linger.
+		if (!effectMovesWindow(activeEffect(current))) {
+			const parkOffScreen = () => {
+				const start = baseTarget();
+				const screenH = win.screen?.availHeight ?? 1080;
+				exitX = start.x;
+				exitY = screenH + OFF_SCREEN_BUFFER;
+				exitAnimating = true;
+				try { origMoveToRaw(exitX, exitY, false); } catch (_e) {}
+			};
+			setTimeout(parkOffScreen, ANIM_DURATION_MS);
+			return;
+		}
 
 		const start = baseTarget();
+		const screenW = win.screen?.availWidth ?? 1920;
 		const screenH = win.screen?.availHeight ?? 1080;
+		const w = win.outerWidth || TOAST_W_FALLBACK;
 		const h = win.outerHeight || TOAST_H_FALLBACK;
 		const pos = activePosition(current);
 		const isTop = pos === POSITION_TOP_RIGHT || pos === POSITION_TOP_LEFT;
-		const offY = isTop ? -h - OFF_SCREEN_BUFFER : screenH + OFF_SCREEN_BUFFER;
+		const dir = activeSlideDirection(current);
 
+		// Resolve the off-screen end point. Auto leaves vertically per corner.
+		let endX = start.x;
+		let endY = start.y;
+		if (dir === SLIDE_LEFT) endX = -w - OFF_SCREEN_BUFFER;
+		else if (dir === SLIDE_RIGHT) endX = screenW + OFF_SCREEN_BUFFER;
+		else if (dir === SLIDE_UP) endY = -h - OFF_SCREEN_BUFFER;
+		else if (dir === SLIDE_DOWN) endY = screenH + OFF_SCREEN_BUFFER;
+		else endY = isTop ? -h - OFF_SCREEN_BUFFER : screenH + OFF_SCREEN_BUFFER;
+
+		exitX = start.x;
+		exitY = start.y;
 		exitAnimating = true;
 		const startedAt = (win as any).performance?.now?.() ?? Date.now();
 		const step = () => {
 			const now = (win as any).performance?.now?.() ?? Date.now();
 			const tProgress = Math.min((now - startedAt) / ANIM_DURATION_MS, 1);
 			const eased = 1 - Math.pow(1 - tProgress, 3);
-			exitY = Math.round(start.y + (offY - start.y) * eased);
-			try { origMoveToRaw(start.x, exitY, false); } catch (_e) {}
+			exitX = Math.round(start.x + (endX - start.x) * eased);
+			exitY = Math.round(start.y + (endY - start.y) * eased);
+			try { origMoveToRaw(exitX, exitY, false); } catch (_e) {}
 			if (tProgress < 1) {
 				(win as any).requestAnimationFrame?.(step) ?? setTimeout(step, FRAME_FALLBACK_MS);
 			}
