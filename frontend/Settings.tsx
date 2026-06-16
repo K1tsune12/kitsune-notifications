@@ -42,6 +42,17 @@ export const SLIDE_DOWN = 'down';
 export const SLIDE_LEFT = 'left';
 export const SLIDE_RIGHT = 'right';
 
+export const SOUND_CAT_MESSAGE = 'message';
+export const SOUND_CAT_GENERAL = 'general';
+export const SOUND_CAT_ACHIEVEMENT = 'achievement';
+export const SOUND_CAT_FRIEND_ONLINE = 'friend_online';
+export const SOUND_CAT_FRIEND_INGAME = 'friend_ingame';
+
+export const SUPPORTED_SOUND_FORMATS = 'MP3, WAV, OGG, M4A, FLAC, Opus';
+const SOUND_MIME: Record<string, string> = {
+	mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', flac: 'audio/flac', opus: 'audio/ogg',
+};
+
 export const DEFAULTS = {
 	enabled: true,
 	position: POSITION_TOP_RIGHT,
@@ -60,6 +71,12 @@ export const DEFAULTS = {
 	overlayMarginRightPx: 16,
 	overlayMarginBottomPx: 16,
 	overlayMarginLeftPx: 16,
+	customSoundsEnabled: false,
+	soundFileMessage: '',
+	soundFileGeneral: '',
+	soundFileAchievement: '',
+	soundFileFriendOnline: '',
+	soundFileFriendInGame: '',
 };
 
 export type Settings = typeof DEFAULTS;
@@ -93,15 +110,37 @@ const effectTravels = (effect: string): boolean =>
 
 const SECTION_GENERAL = 'general';
 const SECTION_OVERLAY = 'overlay';
+const SECTION_SOUNDS = 'sounds';
 const SECTION_ADVANCED = 'advanced';
 const SECTION_OPTIONS = [
 	{ data: SECTION_GENERAL, label: 'General' },
 	{ data: SECTION_OVERLAY, label: 'In-game' },
+	{ data: SECTION_SOUNDS, label: 'Sounds' },
 	{ data: SECTION_ADVANCED, label: 'Advanced' },
 ];
 
 const loadSettingsRaw = callable<[], string>('LoadSettings');
 const saveSettingsRaw = callable<[{ payload: string }], string>('SaveSettings');
+const importSoundRaw = callable<[{ payload: string }], string>('ImportSound');
+const loadSoundRaw = callable<[{ payload: string }], string>('LoadSound');
+const clearSoundRaw = callable<[{ payload: string }], string>('ClearSound');
+
+const soundMime = (ext: string): string => SOUND_MIME[ext] || 'audio/mpeg';
+
+export const soundSettingKey = (category: string): SettingsKey =>
+	category === SOUND_CAT_MESSAGE ? 'soundFileMessage' :
+	category === SOUND_CAT_ACHIEVEMENT ? 'soundFileAchievement' :
+	category === SOUND_CAT_FRIEND_ONLINE ? 'soundFileFriendOnline' :
+	category === SOUND_CAT_FRIEND_INGAME ? 'soundFileFriendInGame' : 'soundFileGeneral';
+
+// Reads the stored file from disk each time so a replaced sound is never stale.
+export async function getSoundDataUri(category: string): Promise<string | null> {
+	try {
+		const r = JSON.parse(await loadSoundRaw({ payload: JSON.stringify({ category }) }));
+		if (r.found && r.data) return `data:${soundMime(r.ext)};base64,${r.data}`;
+	} catch (_e) {}
+	return null;
+}
 
 type Listener = (s: Settings) => void;
 const listeners = new Set<Listener>();
@@ -175,6 +214,74 @@ export const SettingsPanel = () => {
 			disabled={disabled}
 			onChange={(v: number) => update(key, v)}
 		/>
+	);
+
+	// Steam's HTML file input is blocked in CEF, so use the native picker which returns a path.
+	const onPickSound = async (category: string) => {
+		try {
+			const sc: any = (window as any).SteamClient;
+			const path = await sc?.System?.OpenFileDialog?.({
+				strTitle: 'Choose notification sound',
+				rgFilters: [{ strFileTypeName: 'Audio', rFilePatterns: ['*.mp3', '*.wav', '*.ogg', '*.m4a', '*.flac', '*.opus'] }],
+			});
+			if (!path || typeof path !== 'string') return;
+			const res = JSON.parse(await importSoundRaw({ payload: JSON.stringify({ category, path }) }));
+			if (res.success) {
+				update(soundSettingKey(category) as any, res.file as any);
+			}
+		} catch (_e) {}
+	};
+
+	// Removing the custom file makes Steam's original sound play again.
+	const onRestoreDefault = async (category: string) => {
+		try { await clearSoundRaw({ payload: JSON.stringify({ category }) }); } catch (_e) {}
+		update(soundSettingKey(category) as any, '' as any);
+	};
+
+	const onPreviewSound = async (category: string) => {
+		try {
+			const uri = await getSoundDataUri(category);
+			if (uri) { const a = new Audio(uri); a.currentTime = 0; a.play().catch(() => {}); }
+		} catch (_e) {}
+	};
+
+	const soundBtn = { padding: '6px 14px', borderRadius: '2px', background: 'rgba(255,255,255,0.1)', cursor: 'pointer', fontSize: '13px' };
+
+	const soundRow = (category: string, label: string) => {
+		const fileName = settings[soundSettingKey(category)] as string;
+		const off = !settings.customSoundsEnabled;
+		return (
+			<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 0', opacity: off ? 0.4 : 1 }}>
+				<div style={{ display: 'flex', flexDirection: 'column' }}>
+					<span>{label}</span>
+					<span style={{ opacity: 0.6, fontSize: '12px' }}>{fileName || 'Default Steam sound'}</span>
+				</div>
+				<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+					{fileName ? <span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onPreviewSound(category); }}>Play</span> : null}
+					<span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onPickSound(category); }}>Choose</span>
+					{fileName ? <span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onRestoreDefault(category); }}>Restore default</span> : null}
+				</div>
+			</div>
+		);
+	};
+
+	const soundsSection = (
+		<DialogControlsSection>
+			<ToggleField
+				label="Custom notification sounds"
+				description={`Play your own sound per notification type. Supported formats: ${SUPPORTED_SOUND_FORMATS}.`}
+				checked={settings.customSoundsEnabled}
+				onChange={(checked: boolean) => update('customSoundsEnabled', checked)}
+			/>
+			{soundRow(SOUND_CAT_MESSAGE, 'Messages')}
+			{soundRow(SOUND_CAT_GENERAL, 'General notifications')}
+			{soundRow(SOUND_CAT_ACHIEVEMENT, 'Achievements')}
+			{soundRow(SOUND_CAT_FRIEND_ONLINE, 'Friend came online')}
+			{soundRow(SOUND_CAT_FRIEND_INGAME, 'Friend started a game')}
+			<div style={{ opacity: 0.6, fontSize: '12px', paddingTop: '6px' }}>
+				Note: the two friend sounds ride on Steam's own friend events, which have a long-standing, well-known Steam bug - the sound can play with no notification, be delayed, or fire in bursts. That timing is Steam's, not the plugin's.
+			</div>
+		</DialogControlsSection>
 	);
 
 	const generalSection = (
@@ -268,6 +375,7 @@ export const SettingsPanel = () => {
 
 	const sectionContent =
 		section === SECTION_OVERLAY ? overlaySection :
+		section === SECTION_SOUNDS ? soundsSection :
 		section === SECTION_ADVANCED ? advancedSection :
 		generalSection;
 

@@ -1,9 +1,10 @@
-import { callable, definePlugin, IconsModule } from '@steambrew/client';
+import { callable, definePlugin, findModuleExport, IconsModule, modules } from '@steambrew/client';
 import {
 	DEFAULTS,
 	EFFECT_BOUNCE,
 	EFFECT_FADE,
 	EFFECT_SCALE,
+	getSoundDataUri,
 	loadSettings,
 	POSITION_BOTTOM_LEFT,
 	POSITION_BOTTOM_RIGHT,
@@ -15,6 +16,11 @@ import {
 	SLIDE_LEFT,
 	SLIDE_RIGHT,
 	SLIDE_UP,
+	SOUND_CAT_ACHIEVEMENT,
+	SOUND_CAT_FRIEND_INGAME,
+	SOUND_CAT_FRIEND_ONLINE,
+	SOUND_CAT_GENERAL,
+	SOUND_CAT_MESSAGE,
 	subscribeSettings,
 } from './Settings';
 
@@ -31,6 +37,15 @@ interface SteamPopupManager {
 }
 
 let current: Settings = { ...DEFAULTS };
+
+// Timestamp of the last toast popup, so custom sounds only fire alongside a real
+// notification (Steam also plays the message sound at login and in focused chats).
+let lastToastAt = 0;
+const TOAST_SOUND_WINDOW_MS = 2000;
+
+// Steam replays friend status sounds in bulk when a game launches/closes; swallow that burst.
+let friendSuppressUntil = 0;
+const FRIEND_REFRESH_SUPPRESS_MS = 5000;
 
 const debugLog = callable<[{ payload: string }], string>('DebugLog');
 const dlog = (msg: string) => {
@@ -240,8 +255,9 @@ function triggerExitAnim(win: any): void {
 
 function handlePopupCreated(popup: SteamPopup): void {
 	const name = popup.window?.name;
-	if (!current.enabled) return;
 	if (!name || name.indexOf('notificationtoasts_') !== 0) return;
+	lastToastAt = Date.now();
+	if (!current.enabled) return;
 
 	const win: any = popup.window;
 	if (!win) return;
@@ -407,6 +423,8 @@ function installGameLifecycleHook(attempt: number = 0): void {
 	}
 	try {
 		reg.call(sc.GameSessions, (n: AppLifetimeNotification) => {
+			// A game opening/closing makes Steam re-fire friend status sounds in bulk; mute them briefly.
+			friendSuppressUntil = Date.now() + FRIEND_REFRESH_SUPPRESS_MS;
 			if (n.bRunning) {
 				gamesRunning++;
 				dlog(`game ${n.unAppID} started, running=${gamesRunning}`);
@@ -421,8 +439,140 @@ function installGameLifecycleHook(attempt: number = 0): void {
 	}
 }
 
-loadSettings().then((s) => { current = s; });
-subscribeSettings((s) => { current = s; });
+// Custom notification sounds: intercept Steam's nav-sound dispatcher and play our
+// own audio per toast category, suppressing the default for that category.
+const soundCache: Record<string, HTMLAudioElement> = {};
+
+function soundCategoryFor(PN: any, type: any): string | null {
+	if (type === PN.ToastAchievement) return SOUND_CAT_ACHIEVEMENT;
+	if (type === PN.ToastMessage || type === PN.FriendMessage) return SOUND_CAT_MESSAGE;
+	if (type === PN.ToastMisc || type === PN.ToastMiscShort) return SOUND_CAT_GENERAL;
+	return null;
+}
+
+function hasCustomSound(category: string): boolean {
+	if (!current.customSoundsEnabled) return false;
+	if (category === SOUND_CAT_MESSAGE) return !!current.soundFileMessage;
+	if (category === SOUND_CAT_ACHIEVEMENT) return !!current.soundFileAchievement;
+	if (category === SOUND_CAT_FRIEND_ONLINE) return !!current.soundFileFriendOnline;
+	if (category === SOUND_CAT_FRIEND_INGAME) return !!current.soundFileFriendInGame;
+	return !!current.soundFileGeneral;
+}
+
+// Debounce so the two hooks (PlayNavSound + PlayAudioURL) can't double-fire one toast.
+const lastPlayed: Record<string, number> = {};
+
+async function playCustomSound(category: string): Promise<void> {
+	const now = Date.now();
+	const isFriend = category === SOUND_CAT_FRIEND_ONLINE || category === SOUND_CAT_FRIEND_INGAME;
+	const cooldown = isFriend ? 1500 : 300;
+	if (lastPlayed[category] && now - lastPlayed[category] < cooldown) return;
+	lastPlayed[category] = now;
+	try {
+		let audio = soundCache[category];
+		if (!audio) {
+			const uri = await getSoundDataUri(category);
+			if (!uri) return;
+			audio = new Audio(uri);
+			soundCache[category] = audio;
+		}
+		audio.currentTime = 0;
+		audio.play().catch(() => {});
+	} catch (_e) {}
+}
+
+// Message toasts can play their sound directly via PlayAudioURL, bypassing PlayNavSound.
+const MESSAGE_SOUND_RE = /steam_at_mention|steam_chatroom_notification|ui_steam_message|message_old/i;
+const FRIEND_ONLINE_RE = /smoother_friend_online|friend_online/i;
+const FRIEND_INGAME_RE = /smoother_friend_join|friend_join/i;
+// Friend/message sounds play via AudioPlaybackManager.PlayAudioURL directly, and there are
+// several manager instances - hook PlayAudioURL on every export that exposes it.
+let audioUrlHookInstalled = false;
+function installAudioUrlHook(attempt: number = 0): void {
+	if (audioUrlHookInstalled) return;
+	let count = 0;
+	const wrap = (target: any): boolean => {
+		if (!target || typeof target.PlayAudioURL !== 'function' || target.__kitsuneAudioHooked) return false;
+		const orig = target.PlayAudioURL;
+		target.PlayAudioURL = function (url: any, ...rest: any[]) {
+			try {
+				if (typeof url === 'string' && MESSAGE_SOUND_RE.test(url) && hasCustomSound(SOUND_CAT_MESSAGE)
+					&& (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS) {
+					playCustomSound(SOUND_CAT_MESSAGE);
+					return;
+				}
+				// Friend status sounds play without a toast (so they are not toast-gated), but Steam
+				// re-fires them in bulk on game open/close - swallow that window.
+				if (typeof url === 'string') {
+					const fcat = FRIEND_INGAME_RE.test(url) ? SOUND_CAT_FRIEND_INGAME
+						: FRIEND_ONLINE_RE.test(url) ? SOUND_CAT_FRIEND_ONLINE : null;
+					if (fcat && hasCustomSound(fcat)) {
+						if (Date.now() < friendSuppressUntil) return;
+						playCustomSound(fcat);
+						return;
+					}
+				}
+			} catch (_e) {}
+			return orig.apply(this, [url, ...rest]);
+		};
+		target.__kitsuneAudioHooked = true;
+		return true;
+	};
+	try {
+		for (const m of (modules as Map<string, any>).values()) {
+			for (const mod of [m && m.default, m]) {
+				if (!mod || typeof mod !== 'object') continue;
+				for (const name in mod) {
+					let exp: any;
+					try { exp = mod[name]; } catch (_e) { continue; }
+					if (!exp) continue;
+					// Instance/singleton with PlayAudioURL, or a class whose prototype has it.
+					if (typeof exp === 'object' && wrap(exp)) count++;
+					else if (typeof exp === 'function' && exp.prototype && wrap(exp.prototype)) count++;
+				}
+			}
+		}
+	} catch (_e) {}
+	if (count > 0) { audioUrlHookInstalled = true; dlog('audio url hooks installed: ' + count); }
+	else if (attempt < HOOK_RETRY_LIMIT) setTimeout(() => installAudioUrlHook(attempt + 1), HOOK_RETRY_MS);
+	else dlog('audio url hook: no PlayAudioURL export found');
+}
+
+let soundHookInstalled = false;
+function installSoundHook(attempt: number = 0): void {
+	if (soundHookInstalled) return;
+	const mgr: any = findModuleExport((e: any) => e && typeof e.PlayNavSound === 'function' && typeof e.RegisterCallbackOnPlaySound === 'function');
+	const PN: any = findModuleExport((e: any) => e && e.ToastAchievement !== undefined && e.ToastMisc !== undefined);
+	if (!mgr || !PN || typeof mgr.PlayNavSound !== 'function') {
+		if (attempt < HOOK_RETRY_LIMIT) setTimeout(() => installSoundHook(attempt + 1), HOOK_RETRY_MS);
+		else dlog('sound manager / PN enum not found');
+		return;
+	}
+	const orig = mgr.PlayNavSound.bind(mgr);
+	mgr.PlayNavSound = (type: any, mode: any) => {
+		try {
+			const cat = soundCategoryFor(PN, type);
+			if (cat && hasCustomSound(cat)
+				&& (cat !== SOUND_CAT_MESSAGE || (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS)) {
+				playCustomSound(cat); return;
+			}
+		} catch (_e) {}
+		return orig(type, mode);
+	};
+	soundHookInstalled = true;
+	dlog('sound hook installed');
+}
+
+// One-time: drop stale sound data URIs cached in localStorage by older builds (now disk is the source).
+try { Object.keys(localStorage).filter((k) => k.indexOf('kitsune_sound_') === 0).forEach((k) => localStorage.removeItem(k)); } catch (_e) {}
+
+// Steam syncs friend statuses at startup and replays their sounds; mute that initial burst.
+friendSuppressUntil = Date.now() + FRIEND_REFRESH_SUPPRESS_MS;
+
+// Install sound hooks after settings load so debug logging is available during install.
+loadSettings().then((s) => { current = s; installSoundHook(); installAudioUrlHook(); });
+// Drop cached Audio so a freshly picked sound is reloaded.
+subscribeSettings((s) => { current = s; for (const k of Object.keys(soundCache)) delete soundCache[k]; });
 installHook();
 installGameLifecycleHook();
 
