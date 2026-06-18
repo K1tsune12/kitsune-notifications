@@ -31,6 +31,21 @@ local SETTINGS_DEFAULTS = {
     soundFileAchievement = "",
     soundFileFriendOnline = "",
     soundFileFriendInGame = "",
+    overlaySoundFileMessage = "",
+    overlaySoundFileGeneral = "",
+    overlaySoundFileAchievement = "",
+    overlaySoundFileFriendOnline = "",
+    overlaySoundFileFriendInGame = "",
+    soundVolumeMessage = 100,
+    soundVolumeGeneral = 100,
+    soundVolumeAchievement = 100,
+    soundVolumeFriendOnline = 100,
+    soundVolumeFriendInGame = 100,
+    overlaySoundVolumeMessage = 100,
+    overlaySoundVolumeGeneral = 100,
+    overlaySoundVolumeAchievement = 100,
+    overlaySoundVolumeFriendOnline = 100,
+    overlaySoundVolumeFriendInGame = 100,
 }
 
 -- Formats the Chromium/CEF Web Audio decoder accepts.

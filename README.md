@@ -8,7 +8,8 @@ A Millennium plugin that moves Steam's notification popups to the screen corner 
 - Stacks multiple notifications neatly instead of overlapping them.
 - Entry/exit animations: slide, fade, scale or bounce, with a choosable slide direction.
 - Optional separate position and animation for when you are in a game.
-- Custom sounds per notification type: messages, general, achievements, friend online, friend in-game.
+- Custom sounds per notification type (messages, general, achievements, friend online, friend in-game), each with its own volume.
+- Separate sound sets for desktop and in-game.
 
 ## Configure
 Open Millennium, go to Plugins, find Kitsune Notifications and click Configure. There are four sections: General (desktop position, animation and margins), In-game (optional separate profile while a game runs), Sounds (custom audio per notification type), and Advanced (debug logging). Changes save automatically.
@@ -20,6 +21,7 @@ pnpm build
 ```
 
 ## Changelog
+- v0.7.0 - Per-category sound volume, and separate sound sets for desktop and in-game.
 - v0.6.0 - Custom sounds per notification type (messages, general, achievements, friend online, friend in-game).
 - v0.5.0 - Animation effects (slide, fade, scale, bounce), slide direction, separate in-game animation.
 - v0.4.0 - Separate in-game position, new three-section settings panel.

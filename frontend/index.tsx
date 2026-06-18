@@ -21,6 +21,9 @@ import {
 	SOUND_CAT_FRIEND_ONLINE,
 	SOUND_CAT_GENERAL,
 	SOUND_CAT_MESSAGE,
+	soundCatForProfile,
+	soundSettingKey,
+	soundVolumeKey,
 	subscribeSettings,
 } from './Settings';
 
@@ -450,21 +453,24 @@ function soundCategoryFor(PN: any, type: any): string | null {
 	return null;
 }
 
-function hasCustomSound(category: string): boolean {
+// `cat` is a resolved category (desktop base id, or 'ig_'-prefixed for in-game).
+function hasCustomSound(cat: string): boolean {
 	if (!current.customSoundsEnabled) return false;
-	if (category === SOUND_CAT_MESSAGE) return !!current.soundFileMessage;
-	if (category === SOUND_CAT_ACHIEVEMENT) return !!current.soundFileAchievement;
-	if (category === SOUND_CAT_FRIEND_ONLINE) return !!current.soundFileFriendOnline;
-	if (category === SOUND_CAT_FRIEND_INGAME) return !!current.soundFileFriendInGame;
-	return !!current.soundFileGeneral;
+	return !!(current as any)[soundSettingKey(cat)];
 }
 
 // Debounce so the two hooks (PlayNavSound + PlayAudioURL) can't double-fire one toast.
 const lastPlayed: Record<string, number> = {};
 
+// Volume (0..1) for a resolved category.
+function activeVolume(cat: string): number {
+	const v = (current as any)[soundVolumeKey(cat)];
+	return Math.max(0, Math.min(1, (typeof v === 'number' ? v : 100) / 100));
+}
+
 async function playCustomSound(category: string): Promise<void> {
 	const now = Date.now();
-	const isFriend = category === SOUND_CAT_FRIEND_ONLINE || category === SOUND_CAT_FRIEND_INGAME;
+	const isFriend = category.indexOf('friend') !== -1;
 	const cooldown = isFriend ? 1500 : 300;
 	if (lastPlayed[category] && now - lastPlayed[category] < cooldown) return;
 	lastPlayed[category] = now;
@@ -477,6 +483,7 @@ async function playCustomSound(category: string): Promise<void> {
 			soundCache[category] = audio;
 		}
 		audio.currentTime = 0;
+		audio.volume = activeVolume(category);
 		audio.play().catch(() => {});
 	} catch (_e) {}
 }
@@ -496,20 +503,25 @@ function installAudioUrlHook(attempt: number = 0): void {
 		const orig = target.PlayAudioURL;
 		target.PlayAudioURL = function (url: any, ...rest: any[]) {
 			try {
-				if (typeof url === 'string' && MESSAGE_SOUND_RE.test(url) && hasCustomSound(SOUND_CAT_MESSAGE)
-					&& (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS) {
-					playCustomSound(SOUND_CAT_MESSAGE);
-					return;
+				if (typeof url === 'string' && MESSAGE_SOUND_RE.test(url)) {
+					const rc = soundCatForProfile(SOUND_CAT_MESSAGE, useOverlayProfile(current));
+					if (hasCustomSound(rc) && (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS) {
+						playCustomSound(rc);
+						return;
+					}
 				}
 				// Friend status sounds play without a toast (so they are not toast-gated), but Steam
 				// re-fires them in bulk on game open/close - swallow that window.
 				if (typeof url === 'string') {
-					const fcat = FRIEND_INGAME_RE.test(url) ? SOUND_CAT_FRIEND_INGAME
+					const fbase = FRIEND_INGAME_RE.test(url) ? SOUND_CAT_FRIEND_INGAME
 						: FRIEND_ONLINE_RE.test(url) ? SOUND_CAT_FRIEND_ONLINE : null;
-					if (fcat && hasCustomSound(fcat)) {
-						if (Date.now() < friendSuppressUntil) return;
-						playCustomSound(fcat);
-						return;
+					if (fbase) {
+						const rc = soundCatForProfile(fbase, useOverlayProfile(current));
+						if (hasCustomSound(rc)) {
+							if (Date.now() < friendSuppressUntil) return;
+							playCustomSound(rc);
+							return;
+						}
 					}
 				}
 			} catch (_e) {}
@@ -551,10 +563,13 @@ function installSoundHook(attempt: number = 0): void {
 	const orig = mgr.PlayNavSound.bind(mgr);
 	mgr.PlayNavSound = (type: any, mode: any) => {
 		try {
-			const cat = soundCategoryFor(PN, type);
-			if (cat && hasCustomSound(cat)
-				&& (cat !== SOUND_CAT_MESSAGE || (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS)) {
-				playCustomSound(cat); return;
+			const base = soundCategoryFor(PN, type);
+			if (base) {
+				const rc = soundCatForProfile(base, useOverlayProfile(current));
+				if (hasCustomSound(rc)
+					&& (base !== SOUND_CAT_MESSAGE || (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS)) {
+					playCustomSound(rc); return;
+				}
 			}
 		} catch (_e) {}
 		return orig(type, mode);

@@ -77,6 +77,21 @@ export const DEFAULTS = {
 	soundFileAchievement: '',
 	soundFileFriendOnline: '',
 	soundFileFriendInGame: '',
+	overlaySoundFileMessage: '',
+	overlaySoundFileGeneral: '',
+	overlaySoundFileAchievement: '',
+	overlaySoundFileFriendOnline: '',
+	overlaySoundFileFriendInGame: '',
+	soundVolumeMessage: 100,
+	soundVolumeGeneral: 100,
+	soundVolumeAchievement: 100,
+	soundVolumeFriendOnline: 100,
+	soundVolumeFriendInGame: 100,
+	overlaySoundVolumeMessage: 100,
+	overlaySoundVolumeGeneral: 100,
+	overlaySoundVolumeAchievement: 100,
+	overlaySoundVolumeFriendOnline: 100,
+	overlaySoundVolumeFriendInGame: 100,
 };
 
 export type Settings = typeof DEFAULTS;
@@ -127,11 +142,34 @@ const clearSoundRaw = callable<[{ payload: string }], string>('ClearSound');
 
 const soundMime = (ext: string): string => SOUND_MIME[ext] || 'audio/mpeg';
 
-export const soundSettingKey = (category: string): SettingsKey =>
-	category === SOUND_CAT_MESSAGE ? 'soundFileMessage' :
-	category === SOUND_CAT_ACHIEVEMENT ? 'soundFileAchievement' :
-	category === SOUND_CAT_FRIEND_ONLINE ? 'soundFileFriendOnline' :
-	category === SOUND_CAT_FRIEND_INGAME ? 'soundFileFriendInGame' : 'soundFileGeneral';
+// A sound "category" is a base id (e.g. 'message') for the desktop profile, or the same id
+// prefixed with 'ig_' (e.g. 'ig_message') for the in-game profile. The string is also the disk
+// filename base, so the two profiles never collide.
+export const soundCatForProfile = (base: string, overlay: boolean): string => (overlay ? 'ig_' : '') + base;
+
+const SOUND_BASE_CAP: Record<string, string> = {
+	[SOUND_CAT_MESSAGE]: 'Message',
+	[SOUND_CAT_GENERAL]: 'General',
+	[SOUND_CAT_ACHIEVEMENT]: 'Achievement',
+	[SOUND_CAT_FRIEND_ONLINE]: 'FriendOnline',
+	[SOUND_CAT_FRIEND_INGAME]: 'FriendInGame',
+};
+
+const soundCatParts = (category: string): { overlay: boolean; cap: string } => {
+	const overlay = category.indexOf('ig_') === 0;
+	const base = overlay ? category.slice(3) : category;
+	return { overlay, cap: SOUND_BASE_CAP[base] || 'General' };
+};
+
+export const soundSettingKey = (category: string): SettingsKey => {
+	const { overlay, cap } = soundCatParts(category);
+	return ((overlay ? 'overlaySoundFile' : 'soundFile') + cap) as SettingsKey;
+};
+
+export const soundVolumeKey = (category: string): SettingsKey => {
+	const { overlay, cap } = soundCatParts(category);
+	return ((overlay ? 'overlaySoundVolume' : 'soundVolume') + cap) as SettingsKey;
+};
 
 // Reads the stored file from disk each time so a replaced sound is never stale.
 export async function getSoundDataUri(category: string): Promise<string | null> {
@@ -241,27 +279,53 @@ export const SettingsPanel = () => {
 	const onPreviewSound = async (category: string) => {
 		try {
 			const uri = await getSoundDataUri(category);
-			if (uri) { const a = new Audio(uri); a.currentTime = 0; a.play().catch(() => {}); }
+			if (uri) {
+				const a = new Audio(uri);
+				a.volume = Math.max(0, Math.min(1, (settings[soundVolumeKey(category)] as number) / 100));
+				a.currentTime = 0;
+				a.play().catch(() => {});
+			}
 		} catch (_e) {}
 	};
 
 	const soundBtn = { padding: '6px 14px', borderRadius: '2px', background: 'rgba(255,255,255,0.1)', cursor: 'pointer', fontSize: '13px' };
 
+	const volumeSlider = (category: string, label: string, disabled: boolean) => {
+		const key = soundVolumeKey(category);
+		return (
+			<SliderField
+				label={label}
+				value={settings[key] as number}
+				min={0}
+				max={100}
+				step={1}
+				showValue={true}
+				valueSuffix=" %"
+				resetValue={100}
+				disabled={disabled}
+				onChange={(v: number) => update(key as any, v as any)}
+			/>
+		);
+	};
+
 	const soundRow = (category: string, label: string) => {
 		const fileName = settings[soundSettingKey(category)] as string;
 		const off = !settings.customSoundsEnabled;
 		return (
-			<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 0', opacity: off ? 0.4 : 1 }}>
-				<div style={{ display: 'flex', flexDirection: 'column' }}>
-					<span>{label}</span>
-					<span style={{ opacity: 0.6, fontSize: '12px' }}>{fileName || 'Default Steam sound'}</span>
+			<>
+				<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 0', opacity: off ? 0.4 : 1 }}>
+					<div style={{ display: 'flex', flexDirection: 'column' }}>
+						<span>{label}</span>
+						<span style={{ opacity: 0.6, fontSize: '12px' }}>{fileName || 'Default Steam sound'}</span>
+					</div>
+					<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+						{fileName ? <span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onPreviewSound(category); }}>Play</span> : null}
+						<span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onPickSound(category); }}>Choose</span>
+						{fileName ? <span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onRestoreDefault(category); }}>Restore default</span> : null}
+					</div>
 				</div>
-				<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-					{fileName ? <span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onPreviewSound(category); }}>Play</span> : null}
-					<span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onPickSound(category); }}>Choose</span>
-					{fileName ? <span style={{ ...soundBtn, pointerEvents: off ? 'none' : 'auto' }} onClick={() => { if (!off) onRestoreDefault(category); }}>Restore default</span> : null}
-				</div>
-			</div>
+				{fileName ? volumeSlider(category, 'Volume', off) : null}
+			</>
 		);
 	};
 
@@ -273,13 +337,25 @@ export const SettingsPanel = () => {
 				checked={settings.customSoundsEnabled}
 				onChange={(checked: boolean) => update('customSoundsEnabled', checked)}
 			/>
+			<div style={{ fontWeight: 'bold', paddingTop: '12px', paddingBottom: '2px' }}>Desktop</div>
 			{soundRow(SOUND_CAT_MESSAGE, 'Messages')}
 			{soundRow(SOUND_CAT_GENERAL, 'General notifications')}
 			{soundRow(SOUND_CAT_ACHIEVEMENT, 'Achievements')}
 			{soundRow(SOUND_CAT_FRIEND_ONLINE, 'Friend came online')}
 			{soundRow(SOUND_CAT_FRIEND_INGAME, 'Friend started a game')}
-			<div style={{ opacity: 0.6, fontSize: '12px', paddingTop: '6px' }}>
-				Note: the two friend sounds ride on Steam's own friend events, which have a long-standing, well-known Steam bug - the sound can play with no notification, be delayed, or fire in bursts. That timing is Steam's, not the plugin's.
+
+			<div style={{ fontWeight: 'bold', paddingTop: '14px', paddingBottom: '2px' }}>In-game</div>
+			<div style={{ opacity: 0.6, fontSize: '12px', paddingBottom: '2px' }}>
+				Used while a game is running, when "Use different settings while playing" is on (In-game tab).
+			</div>
+			{soundRow(soundCatForProfile(SOUND_CAT_MESSAGE, true), 'Messages')}
+			{soundRow(soundCatForProfile(SOUND_CAT_GENERAL, true), 'General notifications')}
+			{soundRow(soundCatForProfile(SOUND_CAT_ACHIEVEMENT, true), 'Achievements')}
+			{soundRow(soundCatForProfile(SOUND_CAT_FRIEND_ONLINE, true), 'Friend came online')}
+			{soundRow(soundCatForProfile(SOUND_CAT_FRIEND_INGAME, true), 'Friend started a game')}
+
+			<div style={{ opacity: 0.6, fontSize: '12px', paddingTop: '8px' }}>
+				Note: the friend sounds ride on Steam's own friend events, which have a long-standing, well-known Steam bug - the sound can play with no notification, be delayed, or fire in bursts. That timing is Steam's, not the plugin's.
 			</div>
 		</DialogControlsSection>
 	);
