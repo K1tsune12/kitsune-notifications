@@ -21,6 +21,7 @@ pnpm build
 ```
 
 ## Changelog
+- v0.7.1 - Fixed the message sound playing twice (custom plus Steam's default) and a stray sound at login.
 - v0.7.0 - Per-category sound volume, and separate sound sets for desktop and in-game.
 - v0.6.0 - Custom sounds per notification type (messages, general, achievements, friend online, friend in-game).
 - v0.5.0 - Animation effects (slide, fade, scale, bounce), slide direction, separate in-game animation.

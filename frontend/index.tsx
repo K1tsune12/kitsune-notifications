@@ -448,8 +448,8 @@ const soundCache: Record<string, HTMLAudioElement> = {};
 
 function soundCategoryFor(PN: any, type: any): string | null {
 	if (type === PN.ToastAchievement) return SOUND_CAT_ACHIEVEMENT;
-	if (type === PN.ToastMessage || type === PN.FriendMessage) return SOUND_CAT_MESSAGE;
 	if (type === PN.ToastMisc || type === PN.ToastMiscShort) return SOUND_CAT_GENERAL;
+	// Messages are handled via PlayAudioURL (their sound can fire before the toast).
 	return null;
 }
 
@@ -505,8 +505,12 @@ function installAudioUrlHook(attempt: number = 0): void {
 			try {
 				if (typeof url === 'string' && MESSAGE_SOUND_RE.test(url)) {
 					const rc = soundCatForProfile(SOUND_CAT_MESSAGE, useOverlayProfile(current));
-					if (hasCustomSound(rc) && (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS) {
-						playCustomSound(rc);
+					if (hasCustomSound(rc)) {
+						// Always suppress Steam's default; the message sound can fire just before the
+						// toast. Play custom only if a toast shows around now (none at login -> stay silent).
+						const t0 = Date.now();
+						if (t0 - lastToastAt < TOAST_SOUND_WINDOW_MS) playCustomSound(rc);
+						else setTimeout(() => { if (lastToastAt >= t0) playCustomSound(rc); }, 600);
 						return;
 					}
 				}
@@ -566,10 +570,7 @@ function installSoundHook(attempt: number = 0): void {
 			const base = soundCategoryFor(PN, type);
 			if (base) {
 				const rc = soundCatForProfile(base, useOverlayProfile(current));
-				if (hasCustomSound(rc)
-					&& (base !== SOUND_CAT_MESSAGE || (Date.now() - lastToastAt) < TOAST_SOUND_WINDOW_MS)) {
-					playCustomSound(rc); return;
-				}
+				if (hasCustomSound(rc)) { playCustomSound(rc); return; }
 			}
 		} catch (_e) {}
 		return orig(type, mode);
