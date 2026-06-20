@@ -14,16 +14,22 @@ A Millennium plugin that moves Steam's notification popups to the screen corner 
 ## Install
 You need [Millennium](https://steambrew.app) installed first.
 
+### Option A - from the release (recommended, no build)
+1. Download `kitsune-notifications-v*.zip` from the [latest release](https://github.com/K1tsune12/kitsune-notifications/releases/latest).
+2. Extract it into Steam's Millennium plugins folder, so you end up with a `kitsune-notifications` folder inside it:
+   - Windows: `C:\Program Files (x86)\Steam\millennium\plugins\`
+   - Use your own Steam install path if it differs.
+3. Restart Steam.
+4. In Steam, open the Millennium settings, go to Plugins, and turn on Kitsune Notifications.
+
+### Option B - build from source
 1. Clone this repository and build the plugin:
    ```bash
    pnpm install
    pnpm build
    ```
-2. Copy the whole `kitsune-notifications` folder (including the generated `.millennium` folder) into Steam's Millennium plugins folder:
-   - Windows: `C:\Program Files (x86)\Steam\millennium\plugins\`
-   - Use your own Steam install path if it differs.
-3. Restart Steam.
-4. In Steam, open the Millennium settings, go to Plugins, and turn on Kitsune Notifications.
+2. Copy the whole `kitsune-notifications` folder (including the generated `.millennium` folder) into the plugins folder above.
+3. Restart Steam and enable it in Millennium > Plugins.
 
 ## Configure
 Open Millennium, go to Plugins, find Kitsune Notifications and click Configure. There are four sections: General (desktop position, animation and margins), In-game (optional separate profile while a game runs), Sounds (custom audio per notification type), and Advanced (debug logging). Changes save automatically.
