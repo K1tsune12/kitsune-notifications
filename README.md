@@ -11,14 +11,22 @@ A Millennium plugin that moves Steam's notification popups to the screen corner 
 - Custom sounds per notification type (messages, general, achievements, friend online, friend in-game), each with its own volume.
 - Separate sound sets for desktop and in-game.
 
+## Install
+You need [Millennium](https://steambrew.app) installed first.
+
+1. Clone this repository and build the plugin:
+   ```bash
+   pnpm install
+   pnpm build
+   ```
+2. Copy the whole `kitsune-notifications` folder (including the generated `.millennium` folder) into Steam's Millennium plugins folder:
+   - Windows: `C:\Program Files (x86)\Steam\millennium\plugins\`
+   - Use your own Steam install path if it differs.
+3. Restart Steam.
+4. In Steam, open the Millennium settings, go to Plugins, and turn on Kitsune Notifications.
+
 ## Configure
 Open Millennium, go to Plugins, find Kitsune Notifications and click Configure. There are four sections: General (desktop position, animation and margins), In-game (optional separate profile while a game runs), Sounds (custom audio per notification type), and Advanced (debug logging). Changes save automatically.
-
-## Build
-```bash
-pnpm install
-pnpm build
-```
 
 ## Changelog
 - v0.7.1 - Fixed the message sound playing twice (custom plus Steam's default) and a stray sound at login.
