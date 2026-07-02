@@ -47,6 +47,7 @@ export const SOUND_CAT_GENERAL = 'general';
 export const SOUND_CAT_ACHIEVEMENT = 'achievement';
 export const SOUND_CAT_FRIEND_ONLINE = 'friend_online';
 export const SOUND_CAT_FRIEND_INGAME = 'friend_ingame';
+export const SOUND_CAT_SCREENSHOT = 'screenshot';
 
 export const SUPPORTED_SOUND_FORMATS = 'MP3, WAV, OGG, M4A, FLAC, Opus';
 const SOUND_MIME: Record<string, string> = {
@@ -77,21 +78,25 @@ export const DEFAULTS = {
 	soundFileAchievement: '',
 	soundFileFriendOnline: '',
 	soundFileFriendInGame: '',
+	soundFileScreenshot: '',
 	overlaySoundFileMessage: '',
 	overlaySoundFileGeneral: '',
 	overlaySoundFileAchievement: '',
 	overlaySoundFileFriendOnline: '',
 	overlaySoundFileFriendInGame: '',
+	overlaySoundFileScreenshot: '',
 	soundVolumeMessage: 100,
 	soundVolumeGeneral: 100,
 	soundVolumeAchievement: 100,
 	soundVolumeFriendOnline: 100,
 	soundVolumeFriendInGame: 100,
+	soundVolumeScreenshot: 100,
 	overlaySoundVolumeMessage: 100,
 	overlaySoundVolumeGeneral: 100,
 	overlaySoundVolumeAchievement: 100,
 	overlaySoundVolumeFriendOnline: 100,
 	overlaySoundVolumeFriendInGame: 100,
+	overlaySoundVolumeScreenshot: 100,
 };
 
 export type Settings = typeof DEFAULTS;
@@ -153,6 +158,7 @@ const SOUND_BASE_CAP: Record<string, string> = {
 	[SOUND_CAT_ACHIEVEMENT]: 'Achievement',
 	[SOUND_CAT_FRIEND_ONLINE]: 'FriendOnline',
 	[SOUND_CAT_FRIEND_INGAME]: 'FriendInGame',
+	[SOUND_CAT_SCREENSHOT]: 'Screenshot',
 };
 
 const soundCatParts = (category: string): { overlay: boolean; cap: string } => {
@@ -341,6 +347,7 @@ export const SettingsPanel = () => {
 			{soundRow(SOUND_CAT_MESSAGE, 'Messages')}
 			{soundRow(SOUND_CAT_GENERAL, 'General notifications')}
 			{soundRow(SOUND_CAT_ACHIEVEMENT, 'Achievements')}
+			{soundRow(SOUND_CAT_SCREENSHOT, 'Screenshot')}
 			{soundRow(SOUND_CAT_FRIEND_ONLINE, 'Friend came online')}
 			{soundRow(SOUND_CAT_FRIEND_INGAME, 'Friend started a game')}
 
@@ -351,6 +358,7 @@ export const SettingsPanel = () => {
 			{soundRow(soundCatForProfile(SOUND_CAT_MESSAGE, true), 'Messages')}
 			{soundRow(soundCatForProfile(SOUND_CAT_GENERAL, true), 'General notifications')}
 			{soundRow(soundCatForProfile(SOUND_CAT_ACHIEVEMENT, true), 'Achievements')}
+			{soundRow(soundCatForProfile(SOUND_CAT_SCREENSHOT, true), 'Screenshot')}
 			{soundRow(soundCatForProfile(SOUND_CAT_FRIEND_ONLINE, true), 'Friend came online')}
 			{soundRow(soundCatForProfile(SOUND_CAT_FRIEND_INGAME, true), 'Friend started a game')}
 

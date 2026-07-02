@@ -21,6 +21,7 @@ import {
 	SOUND_CAT_FRIEND_ONLINE,
 	SOUND_CAT_GENERAL,
 	SOUND_CAT_MESSAGE,
+	SOUND_CAT_SCREENSHOT,
 	soundCatForProfile,
 	soundSettingKey,
 	soundVolumeKey,
@@ -449,6 +450,7 @@ const soundCache: Record<string, HTMLAudioElement> = {};
 function soundCategoryFor(PN: any, type: any): string | null {
 	if (type === PN.ToastAchievement) return SOUND_CAT_ACHIEVEMENT;
 	if (type === PN.ToastMisc || type === PN.ToastMiscShort) return SOUND_CAT_GENERAL;
+	if (type === PN.Screenshot) return SOUND_CAT_SCREENSHOT;
 	// Messages are handled via PlayAudioURL (their sound can fire before the toast).
 	return null;
 }
