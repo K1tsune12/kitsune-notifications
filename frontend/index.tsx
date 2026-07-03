@@ -4,8 +4,11 @@ import {
 	EFFECT_BOUNCE,
 	EFFECT_FADE,
 	EFFECT_SCALE,
+	fetchMonitors,
 	getSoundDataUri,
 	loadSettings,
+	monitorLogicalRect,
+	type MonitorRect,
 	POSITION_BOTTOM_LEFT,
 	POSITION_BOTTOM_RIGHT,
 	POSITION_TOP_LEFT,
@@ -106,25 +109,63 @@ function activeMargins(s: Settings): { mt: number; mr: number; mb: number; ml: n
 	return { mt: s.marginTopPx, mr: s.marginRightPx, mb: s.marginBottomPx, ml: s.marginLeftPx };
 }
 
-function computeTargetXY(win: Window, settings: Settings, slot: number): { x: number; y: number } {
-	const screenW = win.screen?.availWidth ?? 1920;
-	const screenH = win.screen?.availHeight ?? 1080;
+// Cached logical monitor rects (refreshed periodically so display changes are picked up).
+let monitorsLogical: MonitorRect[] = [];
+function refreshMonitors(): void {
+	fetchMonitors().then((mons) => { monitorsLogical = mons.map(monitorLogicalRect); }).catch(() => {});
+}
+
+const activeMonitorIndex = (s: Settings): number =>
+	useOverlayProfile(s) ? s.overlayMonitorIndex : s.monitorIndex;
+
+// Work-area rect used for positioning: the chosen monitor, or the toast's current screen (auto).
+function activeMonitorRect(win: any, settings: Settings): MonitorRect {
+	const idx = activeMonitorIndex(settings);
+	if (idx >= 0 && monitorsLogical[idx]) return monitorsLogical[idx];
+	const s = win.screen || {};
+	return { left: s.availLeft || 0, top: s.availTop || 0, width: s.availWidth || 1920, height: s.availHeight || 1080 };
+}
+
+const rectsOverlapV = (a: MonitorRect, b: MonitorRect): boolean => a.top < b.top + b.height && a.top + a.height > b.top;
+const rectsOverlapH = (a: MonitorRect, b: MonitorRect): boolean => a.left < b.left + b.width && a.left + a.width > b.left;
+
+// Whether another monitor sits immediately beyond `rect` in direction `dir`.
+function hasNeighbor(rect: MonitorRect, dir: string): boolean {
+	const T = 8;
+	for (const m of monitorsLogical) {
+		if (Math.abs(m.left - rect.left) < T && Math.abs(m.top - rect.top) < T && Math.abs(m.width - rect.width) < T) continue;
+		if (dir === SLIDE_RIGHT && m.left >= rect.left + rect.width - T && rectsOverlapV(m, rect)) return true;
+		if (dir === SLIDE_LEFT && m.left + m.width <= rect.left + T && rectsOverlapV(m, rect)) return true;
+		if (dir === SLIDE_DOWN && m.top >= rect.top + rect.height - T && rectsOverlapH(m, rect)) return true;
+		if (dir === SLIDE_UP && m.top + m.height <= rect.top + T && rectsOverlapH(m, rect)) return true;
+	}
+	return false;
+}
+
+function computeTargetXY(win: any, settings: Settings, slot: number): { x: number; y: number } {
+	const r = activeMonitorRect(win, settings);
 	const w = win.outerWidth || TOAST_W_FALLBACK;
 	const h = win.outerHeight || TOAST_H_FALLBACK;
 	const cascadeStep = h + CASCADE_GAP;
 	const { mt, mr, mb, ml } = activeMargins(settings);
 
+	let x: number;
+	let y: number;
 	switch (activePosition(settings)) {
 		case POSITION_TOP_RIGHT:
-			return { x: screenW - w - mr, y: mt + slot * cascadeStep };
+			x = r.left + r.width - w - mr; y = r.top + mt + slot * cascadeStep; break;
 		case POSITION_TOP_LEFT:
-			return { x: ml, y: mt + slot * cascadeStep };
+			x = r.left + ml; y = r.top + mt + slot * cascadeStep; break;
 		case POSITION_BOTTOM_LEFT:
-			return { x: ml, y: screenH - h - mb - slot * cascadeStep };
+			x = r.left + ml; y = r.top + r.height - h - mb - slot * cascadeStep; break;
 		case POSITION_BOTTOM_RIGHT:
 		default:
-			return { x: screenW - w - mr, y: screenH - h - mb - slot * cascadeStep };
+			x = r.left + r.width - w - mr; y = r.top + r.height - h - mb - slot * cascadeStep;
 	}
+	// Keep the toast fully within the chosen monitor so it never lands off-screen.
+	x = Math.max(r.left, Math.min(x, r.left + r.width - w));
+	y = Math.max(r.top, Math.min(y, r.top + r.height - h));
+	return { x, y };
 }
 
 // Off-screen transform; SLIDE_AUTO follows the corner, otherwise explicit.
@@ -257,6 +298,7 @@ function triggerExitAnim(win: any): void {
 	} catch (_e) { /* doc may be gone */ }
 }
 
+
 function handlePopupCreated(popup: SteamPopup): void {
 	const name = popup.window?.name;
 	if (!name || name.indexOf('notificationtoasts_') !== 0) return;
@@ -318,6 +360,7 @@ function handlePopupCreated(popup: SteamPopup): void {
 		sc.Window.MoveTo(t.x, t.y, false);
 	} catch (e) { dlog(`initial MoveTo failed: ${(e as Error)?.message ?? e}`); }
 
+
 	// Inject the slide-in keyframes (retry until the doc is ready).
 	const tryInject = (attempts: number) => {
 		if (win.document?.documentElement) {
@@ -337,9 +380,18 @@ function handlePopupCreated(popup: SteamPopup): void {
 		if (!effectMovesWindow(activeEffect(current))) {
 			const parkOffScreen = () => {
 				const start = baseTarget();
-				const screenH = win.screen?.availHeight ?? 1080;
-				exitX = start.x;
-				exitY = screenH + OFF_SCREEN_BUFFER;
+				const r = activeMonitorRect(win, current);
+				const w = win.outerWidth || TOAST_W_FALLBACK;
+				const h = win.outerHeight || TOAST_H_FALLBACK;
+				// Park off a neighbor-free edge so the backdrop leaves without touching another screen.
+				let px = start.x;
+				let py = start.y;
+				if (!hasNeighbor(r, SLIDE_DOWN)) py = r.top + r.height + OFF_SCREEN_BUFFER;
+				else if (!hasNeighbor(r, SLIDE_UP)) py = r.top - h - OFF_SCREEN_BUFFER;
+				else if (!hasNeighbor(r, SLIDE_RIGHT)) px = r.left + r.width + OFF_SCREEN_BUFFER;
+				else if (!hasNeighbor(r, SLIDE_LEFT)) px = r.left - w - OFF_SCREEN_BUFFER;
+				exitX = px;
+				exitY = py;
 				exitAnimating = true;
 				try { origMoveToRaw(exitX, exitY, false); } catch (_e) {}
 			};
@@ -348,22 +400,27 @@ function handlePopupCreated(popup: SteamPopup): void {
 		}
 
 		const start = baseTarget();
-		const screenW = win.screen?.availWidth ?? 1920;
-		const screenH = win.screen?.availHeight ?? 1080;
+		const r = activeMonitorRect(win, current);
 		const w = win.outerWidth || TOAST_W_FALLBACK;
 		const h = win.outerHeight || TOAST_H_FALLBACK;
 		const pos = activePosition(current);
 		const isTop = pos === POSITION_TOP_RIGHT || pos === POSITION_TOP_LEFT;
-		const dir = activeSlideDirection(current);
+		let d = activeSlideDirection(current);
+		if (d !== SLIDE_LEFT && d !== SLIDE_RIGHT && d !== SLIDE_UP && d !== SLIDE_DOWN) d = isTop ? SLIDE_UP : SLIDE_DOWN;
 
-		// Resolve the off-screen end point. Auto leaves vertically per corner.
+		// Off-screen end point relative to the active monitor.
 		let endX = start.x;
 		let endY = start.y;
-		if (dir === SLIDE_LEFT) endX = -w - OFF_SCREEN_BUFFER;
-		else if (dir === SLIDE_RIGHT) endX = screenW + OFF_SCREEN_BUFFER;
-		else if (dir === SLIDE_UP) endY = -h - OFF_SCREEN_BUFFER;
-		else if (dir === SLIDE_DOWN) endY = screenH + OFF_SCREEN_BUFFER;
-		else endY = isTop ? -h - OFF_SCREEN_BUFFER : screenH + OFF_SCREEN_BUFFER;
+		if (d === SLIDE_LEFT) endX = r.left - w - OFF_SCREEN_BUFFER;
+		else if (d === SLIDE_RIGHT) endX = r.left + r.width + OFF_SCREEN_BUFFER;
+		else if (d === SLIDE_UP) endY = r.top - h - OFF_SCREEN_BUFFER;
+		else if (d === SLIDE_DOWN) endY = r.top + r.height + OFF_SCREEN_BUFFER;
+
+		// If a monitor sits in that direction, confine the slide to this screen (no bleed).
+		if (hasNeighbor(r, d)) {
+			endX = Math.max(r.left, Math.min(endX, r.left + r.width - w));
+			endY = Math.max(r.top, Math.min(endY, r.top + r.height - h));
+		}
 
 		exitX = start.x;
 		exitY = start.y;
@@ -593,6 +650,9 @@ loadSettings().then((s) => { current = s; installSoundHook(); installAudioUrlHoo
 subscribeSettings((s) => { current = s; for (const k of Object.keys(soundCache)) delete soundCache[k]; });
 installHook();
 installGameLifecycleHook();
+// Enumerate monitors up front and re-check periodically so display changes are picked up.
+refreshMonitors();
+setInterval(refreshMonitors, 15000);
 
 export default definePlugin(() => ({
 	title: 'Kitsune Notifications',

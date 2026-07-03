@@ -8,6 +8,7 @@ A Millennium plugin that moves Steam's notification popups to the screen corner 
 - Stacks multiple notifications neatly instead of overlapping them.
 - Entry/exit animations: slide, fade, scale or bounce, with a choosable slide direction.
 - Optional separate position and animation for when you are in a game.
+- Choose which monitor toasts appear on (per profile), with the animation confined to that screen.
 - Custom sounds per notification type (messages, general, achievements, screenshots, friend online, friend in-game), each with its own volume.
 - Separate sound sets for desktop and in-game.
 
@@ -35,6 +36,7 @@ You need [Millennium](https://steambrew.app) installed first.
 Open Millennium, go to Plugins, find Kitsune Notifications and click Configure. There are four sections: General (desktop position, animation and margins), In-game (optional separate profile while a game runs), Sounds (custom audio per notification type), and Advanced (debug logging). Changes save automatically.
 
 ## Changelog
+- v0.9.0 - Choose which monitor toasts appear on (per profile), and keep the entry/exit animation on the active screen. Cross-scale monitors need a steam.exe DPI override (see the Monitor setting's note).
 - v0.8.0 - Custom sound for screenshots, for both desktop and in-game.
 - v0.7.1 - Fixed the message sound playing twice (custom plus Steam's default) and a stray sound at login.
 - v0.7.0 - Per-category sound volume, and separate sound sets for desktop and in-game.

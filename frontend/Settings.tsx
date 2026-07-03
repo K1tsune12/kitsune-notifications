@@ -57,6 +57,7 @@ const SOUND_MIME: Record<string, string> = {
 export const DEFAULTS = {
 	enabled: true,
 	position: POSITION_TOP_RIGHT,
+	monitorIndex: -1,
 	effect: EFFECT_SLIDE,
 	slideDirection: SLIDE_AUTO,
 	marginTopPx: 16,
@@ -66,6 +67,7 @@ export const DEFAULTS = {
 	debugMode: false,
 	overlayEnabled: false,
 	overlayPosition: POSITION_TOP_RIGHT,
+	overlayMonitorIndex: -1,
 	overlayEffect: EFFECT_SLIDE,
 	overlaySlideDirection: SLIDE_AUTO,
 	overlayMarginTopPx: 16,
@@ -144,6 +146,28 @@ const saveSettingsRaw = callable<[{ payload: string }], string>('SaveSettings');
 const importSoundRaw = callable<[{ payload: string }], string>('ImportSound');
 const loadSoundRaw = callable<[{ payload: string }], string>('LoadSound');
 const clearSoundRaw = callable<[{ payload: string }], string>('ClearSound');
+const getMonitorsRaw = callable<[], string>('GetMonitors');
+
+export interface MonitorRect { left: number; top: number; width: number; height: number; }
+
+// Fetches the physical monitor list from the native backend.
+export async function fetchMonitors(): Promise<any[]> {
+	try {
+		const r = JSON.parse(await getMonitorsRaw());
+		return Array.isArray(r.monitors) ? r.monitors : [];
+	} catch (_e) { return []; }
+}
+
+// MoveTo uses logical (CSS) pixels, so convert the physical work area by the monitor's DPI scale.
+export function monitorLogicalRect(m: any): MonitorRect {
+	const scale = (m.dpi || 96) / 96;
+	return {
+		left: Math.round(m.workLeft / scale),
+		top: Math.round(m.workTop / scale),
+		width: Math.round((m.workRight - m.workLeft) / scale),
+		height: Math.round((m.workBottom - m.workTop) / scale),
+	};
+}
 
 const soundMime = (ext: string): string => SOUND_MIME[ext] || 'audio/mpeg';
 
@@ -230,10 +254,20 @@ type MarginKey =
 export const SettingsPanel = () => {
 	const [settings, setSettings] = useState<Settings | null>(null);
 	const [section, setSection] = useState<string>(SECTION_GENERAL);
+	const [monitors, setMonitors] = useState<any[]>([]);
 
 	useEffect(() => {
 		loadSettings().then(setSettings);
+		fetchMonitors().then(setMonitors);
 	}, []);
+
+	const monitorOptions = [
+		{ data: -1, label: 'Automatic (current screen)' },
+		...monitors.map((m: any, i: number) => ({
+			data: i,
+			label: `Monitor ${i + 1}${m.primary ? ' (primary)' : ''} - ${m.right - m.left}x${m.bottom - m.top}`,
+		})),
+	];
 
 	if (!settings) {
 		return <DialogControlsSection>Loading settings…</DialogControlsSection>;
@@ -385,6 +419,14 @@ export const SettingsPanel = () => {
 				onChange={(opt: SingleDropdownOption) => update('position', opt.data as number)}
 			/>
 			<DropdownItem
+				label="Monitor"
+				description="Which screen toasts appear on. Automatic uses wherever Steam places them. To put toasts on a monitor whose Windows scale (%) differs from your primary, override steam.exe's DPI: right-click steam.exe > Properties > Compatibility > Change high DPI settings > tick 'Override high DPI scaling behavior' > pick 'System' (not 'System (Enhanced)', which can crop games) > restart Steam. Trade-off: Steam's own UI looks a bit smaller on a high-DPI primary."
+				rgOptions={monitorOptions}
+				selectedOption={settings.monitorIndex}
+				disabled={!settings.enabled}
+				onChange={(opt: SingleDropdownOption) => update('monitorIndex', opt.data as number)}
+			/>
+			<DropdownItem
 				label="Animation"
 				description="Entry/exit effect for toasts. Slide and Bounce move off-screen; Fade and Scale stay in place."
 				rgOptions={EFFECT_OPTIONS}
@@ -422,6 +464,14 @@ export const SettingsPanel = () => {
 				selectedOption={settings.overlayPosition}
 				disabled={!settings.overlayEnabled}
 				onChange={(opt: SingleDropdownOption) => update('overlayPosition', opt.data as number)}
+			/>
+			<DropdownItem
+				label="Monitor"
+				description="Which screen toasts appear on while a game is running. For a monitor with a different Windows scale, the same steam.exe DPI override described in the General tab's Monitor note is needed."
+				rgOptions={monitorOptions}
+				selectedOption={settings.overlayMonitorIndex}
+				disabled={!settings.overlayEnabled}
+				onChange={(opt: SingleDropdownOption) => update('overlayMonitorIndex', opt.data as number)}
 			/>
 			<DropdownItem
 				label="Animation"

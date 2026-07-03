@@ -10,6 +10,7 @@ local POSITION_TOP_RIGHT = 1
 local SETTINGS_DEFAULTS = {
     enabled = true,
     position = POSITION_TOP_RIGHT,
+    monitorIndex = -1,
     effect = "slide",
     slideDirection = "auto",
     marginTopPx = 16,
@@ -19,6 +20,7 @@ local SETTINGS_DEFAULTS = {
     debugMode = false,
     overlayEnabled = false,
     overlayPosition = POSITION_TOP_RIGHT,
+    overlayMonitorIndex = -1,
     overlayEffect = "slide",
     overlaySlideDirection = "auto",
     overlayMarginTopPx = 16,
@@ -174,10 +176,61 @@ function SaveSettings(payload)
     return json.encode({ success = true })
 end
 
--- FFI CreateDirectoryA so we can make the sounds folder without flashing a console.
+-- FFI: CreateDirectoryA (sounds folder) and monitor enumeration (choose display).
 local ok_ffi, ffi = pcall(require, "ffi")
 if ok_ffi then
-    pcall(function() ffi.cdef [[ int CreateDirectoryA(const char* path, void* sa); ]] end)
+    pcall(function()
+        ffi.cdef [[
+            int CreateDirectoryA(const char* path, void* sa);
+            typedef struct { long left, top, right, bottom; } KRECT;
+            typedef struct { unsigned long cbSize; KRECT rcMonitor; KRECT rcWork; unsigned long dwFlags; } KMONITORINFO;
+            typedef int (__stdcall *KMONENUMPROC)(void*, void*, KRECT*, long long);
+            int EnumDisplayMonitors(void* hdc, KRECT* clip, KMONENUMPROC proc, long long data);
+            int GetMonitorInfoA(void* hMonitor, KMONITORINFO* lpmi);
+            int GetDpiForMonitor(void* hmonitor, int dpiType, unsigned int* dpiX, unsigned int* dpiY);
+            long long SetThreadDpiAwarenessContext(long long dpiContext);
+        ]]
+    end)
+end
+
+-- Enumerates all monitors (physical px + DPI); the frontend converts to logical coords.
+function GetMonitors()
+    if not ok_ffi then return json.encode({ monitors = {} }) end
+    local monitors = {}
+    pcall(function()
+        local user32 = ffi.load("user32")
+        local ok_shcore, shcore = pcall(ffi.load, "shcore")
+        -- Enumerate as per-monitor DPI aware so we get real physical pixels + correct DPI.
+        local prev = nil
+        pcall(function()
+            prev = user32.SetThreadDpiAwarenessContext(-4) -- PER_MONITOR_AWARE_V2
+            if tonumber(prev) == 0 then prev = user32.SetThreadDpiAwarenessContext(-3) end -- PER_MONITOR_AWARE
+        end)
+        local cb = ffi.cast("KMONENUMPROC", function(hmon, _hdc, _lprc, _data)
+            local mi = ffi.new("KMONITORINFO")
+            mi.cbSize = ffi.sizeof("KMONITORINFO")
+            if user32.GetMonitorInfoA(hmon, mi) ~= 0 then
+                local dpi = 96
+                if ok_shcore then
+                    local dx = ffi.new("unsigned int[1]")
+                    local dy = ffi.new("unsigned int[1]")
+                    pcall(function() if shcore.GetDpiForMonitor(hmon, 0, dx, dy) == 0 then dpi = tonumber(dx[0]) end end)
+                end
+                monitors[#monitors + 1] = {
+                    left = tonumber(mi.rcMonitor.left), top = tonumber(mi.rcMonitor.top),
+                    right = tonumber(mi.rcMonitor.right), bottom = tonumber(mi.rcMonitor.bottom),
+                    workLeft = tonumber(mi.rcWork.left), workTop = tonumber(mi.rcWork.top),
+                    workRight = tonumber(mi.rcWork.right), workBottom = tonumber(mi.rcWork.bottom),
+                    dpi = dpi, primary = (tonumber(mi.dwFlags) % 2 == 1),
+                }
+            end
+            return 1
+        end)
+        user32.EnumDisplayMonitors(nil, nil, cb, 0)
+        cb:free()
+        if prev ~= nil and tonumber(prev) ~= 0 then pcall(function() user32.SetThreadDpiAwarenessContext(prev) end) end
+    end)
+    return json.encode({ monitors = monitors })
 end
 
 local function sounds_dir()
