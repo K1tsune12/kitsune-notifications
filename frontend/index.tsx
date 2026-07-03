@@ -650,9 +650,9 @@ loadSettings().then((s) => { current = s; installSoundHook(); installAudioUrlHoo
 subscribeSettings((s) => { current = s; for (const k of Object.keys(soundCache)) delete soundCache[k]; });
 installHook();
 installGameLifecycleHook();
-// Enumerate monitors up front and re-check periodically so display changes are picked up.
+// Enumerate monitors once at startup (native call - avoid running it repeatedly, especially
+// while a game is changing the display mode, which can crash the enumeration).
 refreshMonitors();
-setInterval(refreshMonitors, 15000);
 
 export default definePlugin(() => ({
 	title: 'Kitsune Notifications',
