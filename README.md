@@ -33,9 +33,10 @@ You need [Millennium](https://steambrew.app) installed first.
 3. Restart Steam and enable it in Millennium > Plugins.
 
 ## Configure
-Open Millennium, go to Plugins, find Kitsune Notifications and click Configure. There are four sections: General (desktop position, animation and margins), In-game (optional separate profile while a game runs), Sounds (custom audio per notification type), and Advanced (debug logging). Changes save automatically.
+Open Millennium, go to Plugins, find Kitsune Notifications and click Configure. There are four sections: General (desktop position, animation and margins), In-game (optional separate profile while a game runs), Sounds (custom audio per notification type), and Advanced (debug logging and a check for updates button). Changes save automatically.
 
 ## Changelog
+- v0.9.1 - Check for updates button in the Advanced section.
 - v0.9.0 - Choose which monitor toasts appear on (per profile), and keep the entry/exit animation on the active screen. Cross-scale monitors need a steam.exe DPI override (see the Monitor setting's note).
 - v0.8.0 - Custom sound for screenshots, for both desktop and in-game.
 - v0.7.1 - Fixed the message sound playing twice (custom plus Steam's default) and a stray sound at login.
