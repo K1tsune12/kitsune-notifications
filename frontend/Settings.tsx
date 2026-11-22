@@ -7,6 +7,7 @@ import {
 	SliderField,
 	ToggleField,
 } from '@steambrew/client';
+import { UpdateCheckField } from './UpdateCheck';
 
 declare global {
 	interface Window {
@@ -504,6 +505,7 @@ export const SettingsPanel = () => {
 				checked={settings.debugMode}
 				onChange={(checked: boolean) => update('debugMode', checked)}
 			/>
+			<UpdateCheckField />
 		</DialogControlsSection>
 	);
 
